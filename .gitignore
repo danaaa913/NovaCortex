@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------- secrets
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------- virtualenvs
+.venv/
+venv/
+venv_nova/
+env/
+
+# ---------------------------------------------------------------- python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# ---------------------------------------------------------------- test/tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---------------------------------------------------------------- databases
+*.db
+*.sqlite
+*.sqlite3
+
+# ---------------------------------------------------------------- logs
+*.log
+logs/
+
+# ---------------------------------------------------------------- runtime caches & generated artefacts
+cache/
+chroma_ultra/
+dashboard_output/
+*.pkl
+*.zip
+synthetic_questions.json
+progress.json
+
+# ---------------------------------------------------------------- editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

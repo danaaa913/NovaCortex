@@ -1,0 +1,161 @@
+import os
+import sqlite3
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from detectron2.engine import DefaultPredictor
+from detectron2.config import get_cfg
+from detectron2 import model_zoo
+from detectron2.utils.visualizer import Visualizer
+from detectron2.data import MetadataCatalog
+import cv2
+from io import BytesIO
+import random  # لإضافة نصائح بيئية عشوائية
+
+# إعداد الموديل (غيّر المسار لموديلك)
+cfg = get_cfg()
+cfg.merge_from_file(model_zoo.get_config_file("COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"))
+cfg.MODEL.ROI_HEADS.NUM_CLASSES = 5  # عدد الكلاسات عندك
+cfg.MODEL.WEIGHTS = "/path/to/your/model_final.pth"  # غيّر بالمسار الحقيقي
+cfg.MODEL.DEVICE = "cpu"  # أو "cuda" لو على GPU
+predictor = DefaultPredictor(cfg)
+metadata = MetadataCatalog.get("trash_val")  # اسم الداتاسيت اللي استخدمته
+
+# نصائح بيئية عشوائية
+tips = [
+    "فصل القمامة يساعد في إعادة التدوير! ♻️",
+    "رمي القمامة في الحاوية يحافظ على البيئة نظيفة 🌍",
+    "استخدم أكياس قابلة للتحلل للقمامة العضوية!",
+    "قلل من استخدام البلاستيك لتقليل التلوث البحري 🐟"
+]
+
+# إعداد الداتابيس
+def init_db():
+    conn = sqlite3.connect('trash_db.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            image_path TEXT,
+            predictions TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()  # ينشئ الداتابيس إذا مش موجود
+
+# دالة لتخزين التنبؤ
+def save_prediction(user_id, image_path, predictions):
+    conn = sqlite3.connect('trash_db.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO predictions (user_id, image_path, predictions) VALUES (?, ?, ?)
+    ''', (user_id, image_path, predictions))
+    conn.commit()
+    conn.close()
+
+# رسالة /start
+def start(update: Update, context: CallbackContext):
+    user = update.message.from_user
+    keyboard = [
+        [InlineKeyboardButton("مساعدة", callback_data='help')],
+        [InlineKeyboardButton("إحصائياتي", callback_data='stats')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    update.message.reply_text(
+        f"مرحبا {user.first_name}! أنا بوت كاشف القمامة الذكي. 🌍\n"
+        "أرفع صورة، وسأكشف أنواع القمامة فيها (مثل كيس، علبة، إلخ) مع رسم ماسكات عليها.\n"
+        "هدفي: مساعدتك في الوعي البيئي وتنظيف المكان!\n"
+        "جرب الآن: أرسل صورة 📸",
+        reply_markup=reply_markup
+    )
+
+# معالجة الزر (callback)
+def button_handler(update: Update, context: CallbackContext):
+    query = update.callback_query
+    query.answer()
+    
+    if query.data == 'help':
+        query.edit_message_text(
+            "تعليمات البوت:\n"
+            "1. أرسل صورة: سأكشف القمامة وأرسل الصورة مرسومة + وصف.\n"
+            "2. /stats: شاهد إحصائياتك (عدد الصور، الكلاسات الأكثر شيوعًا).\n"
+            "3. /start: رجوع للقائمة الرئيسية."
+        )
+    elif query.data == 'stats':
+        user_id = query.from_user.id
+        conn = sqlite3.connect('trash_db.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT predictions FROM predictions WHERE user_id = ?', (user_id,))
+        results = cursor.fetchall()
+        conn.close()
+        
+        if not results:
+            query.edit_message_text("ما عندك صور محفوظة بعد! أرسل صورة أولاً.")
+        else:
+            all_preds = [pred[0] for pred in results]
+            stats = Counter(all_preds)
+            text = "إحصائياتك:\n"
+            text += f"عدد الصور: {len(results)}\n"
+            for k, v in stats.items():
+                text += f"{k}: {v} مرة\n"
+            query.edit_message_text(text)
+
+# معالجة الصورة
+def handle_photo(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    photo_file = update.message.photo[-1].get_file()
+    image_path = f"images/{photo_file.file_id}.jpg"
+    os.makedirs("images", exist_ok=True)
+    
+    # تحميل الصورة
+    photo_file.download(image_path)
+    image = cv2.imread(image_path)
+    
+    update.message.reply_text("جاري الكشف عن القمامة... 📸")
+    
+    # التنبؤ بالموديل
+    outputs = predictor(image)
+    v = Visualizer(image[:, :, ::-1], metadata=metadata, scale=0.8)
+    out = v.draw_instance_predictions(outputs["instances"].to("cpu"))
+    result_image = out.get_image()[:, :, ::-1]
+    
+    # استخراج الكلاسات
+    if outputs["instances"].has("pred_classes"):
+        pred_classes = outputs["instances"].pred_classes.cpu().numpy()
+        class_names = [metadata.thing_classes[i] for i in pred_classes]
+        prediction_text = f"تم اكتشاف: {', '.join(class_names)}" if class_names else "لا يوجد قمامة!"
+        prediction_text += f"\nنصيحة: {random.choice(tips)}"
+    else:
+        prediction_text = "لا يوجد اكتشافات! جرب صورة أخرى."
+    
+    # حفظ في الداتابيس
+    save_prediction(user_id, image_path, ', '.join(class_names))
+    
+    # إرسال النتيجة
+    with BytesIO() as bio:
+        cv2.imwrite("temp.jpg", result_image)
+        bio.seek(0)
+        bio.write(open("temp.jpg", "rb").read())
+        bio.seek(0)
+        update.message.reply_photo(photo=bio, caption=prediction_text)
+
+# الـ main
+def main():
+    TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"  # غيّر بالتوكن
+    updater = Updater(TOKEN, use_context=True)
+    dispatcher = updater.dispatcher
+    
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(CallbackQueryHandler(button_handler))
+    dispatcher.add_handler(MessageHandler(Filters.photo, handle_photo))
+    dispatcher.add_handler(CommandHandler("stats", lambda update, context: button_handler(update, context, 'stats')))
+    
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == '__main__':
+    main()
