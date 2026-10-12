@@ -86,6 +86,14 @@ python hackathon.py ask "السؤال هنا"
 python hackathon.py chat
 ```
 
+ولواجهة عرض محلية للحكام:
+
+```powershell
+streamlit run hackathon_ui.py
+```
+
+تتيح الواجهة فحص البيئة، ومعاينة الـchunks، وبناء الفهرس، وطرح الأسئلة، وعرض المصادر وتفاصيل الاسترجاع والزمن.
+
 بعد إنشاء ملف تقييم من نسخة `hackathon_eval.example.json`:
 
 ```powershell

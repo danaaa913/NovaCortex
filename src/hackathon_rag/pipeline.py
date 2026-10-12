@@ -138,12 +138,32 @@ class HackathonRAG:
         return answerer.answer(question, retrieved, parents)
 
     def doctor(self) -> dict:
+        import importlib.util
+
+        dependencies = {
+            "requests": "requests",
+            "chromadb": "chromadb",
+            "pdfplumber": "pdfplumber",
+            "docx": "docx",
+            "pptx": "pptx",
+            "openpyxl": "openpyxl",
+            "streamlit": "streamlit",
+        }
         result = {
             "ollama_url": self.config.ollama_base_url,
             "chat_model": self.config.chat_model,
             "embedding_model": self.config.embedding_model,
             "documents_dir": str(self.config.documents_dir),
             "index_dir": str(self.config.index_dir),
+            "documents_directory_exists": self.config.documents_dir.exists(),
+            "index_ready": all(
+                path.exists()
+                for path in (self.store.chunks_path, self.store.parents_path, self.store.manifest_path)
+            ),
+            "dependencies": {
+                label: importlib.util.find_spec(module) is not None
+                for label, module in dependencies.items()
+            },
         }
         try:
             models = self.ollama.tags()
