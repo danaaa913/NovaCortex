@@ -1,5 +1,6 @@
 """Answer pipeline: routing, RAG, web search and LLM fallback."""
 
+import asyncio
 import json
 import logging
 import re
@@ -11,12 +12,14 @@ from novacortex.cache import compute_dynamic_threshold
 from novacortex.db import update_daily_stats
 from novacortex.formatting import NO_RESULT_MESSAGE_AR, NO_RESULT_MESSAGE_EN, formatter
 from novacortex.intents import expand_colloquial_terms, facts_router, semantic_parser
+from novacortex.input_rules import needs_false_premise_check
 from novacortex.knowledge.careers import CV_TEMPLATES, SKILL_GAP_DATA
 from novacortex.knowledge.facts import VERIFIED_FACTS
 from novacortex.knowledge.faculty import COUNSELING_CONTACTS, FACULTY_DB, FMD_BASE_URL, FMD_SEARCH_URL, GRADUATION_HOURS, HARD_COURSES_BY_MAJOR
 from novacortex.knowledge.keywords import ACADEMIC_SOS_KEYWORDS, CRISIS_KEYWORDS, CV_BUILDER_KEYWORDS, FEES_KEYWORDS, GRADUATION_SIMULATOR_KEYWORDS, LINKEDIN_GUIDE_KEYWORDS, SCHOLARSHIP_KEYWORDS, SKILL_GAP_KEYWORDS
 from novacortex.llm import llm_client
 from novacortex.memory import memory_system
+from novacortex.quality import retrieval_confidence, web_confidence
 from novacortex.rag.generation import apply_proxy_prompt, llm_generator
 from novacortex.rag.reranking import reranker
 from novacortex.rag.web_search import web_searcher
@@ -243,7 +246,8 @@ CV structure for IT students:
 Question: {question}"""
 
         try:
-            resp = llm_client.chat.completions.create(
+            resp = await asyncio.to_thread(
+                llm_client.chat.completions.create,
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "user", "content": context_block}],
                 temperature=0.3,
@@ -398,7 +402,8 @@ Question: {question}"""
 السؤال: {question}"""
 
         try:
-            resp = llm_client.chat.completions.create(
+            resp = await asyncio.to_thread(
+                llm_client.chat.completions.create,
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "user", "content": context_block}],
                 temperature=0.3,
@@ -489,7 +494,8 @@ Question: {question}"""
 السؤال: {question}"""
 
         try:
-            resp = llm_client.chat.completions.create(
+            resp = await asyncio.to_thread(
+                llm_client.chat.completions.create,
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "user", "content": context_block}],
                 temperature=0.45,
@@ -587,7 +593,8 @@ NovaCortex لا يعطيك نصائح، بل يعطيك خريطة الطريق 
 السؤال: {question}
 """
         try:
-            resp = llm_client.chat.completions.create(
+            resp = await asyncio.to_thread(
+                llm_client.chat.completions.create,
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "user", "content": context_block}],
                 temperature=0.35,
@@ -617,7 +624,8 @@ NovaCortex لا يعطيك نصائح، بل يعطيك خريطة الطريق 
             "- حافظ على لغة السؤال الأصلية"
         )
         try:
-            response = llm_client.chat.completions.create(
+            response = await asyncio.to_thread(
+                llm_client.chat.completions.create,
                 model="llama-3.1-8b-instant",
                 messages=[
                     {"role": "system", "content": split_prompt},
@@ -651,7 +659,7 @@ NovaCortex لا يعطيك نصائح، بل يعطيك خريطة الطريق 
         context = self.memory.get_context(user_id, max_messages=6)
         has_context = len(context) > 0
         false_premise_correction = check_false_premise(question, detected_lang)
-        if not false_premise_correction:
+        if not false_premise_correction and needs_false_premise_check(question):
             false_premise_correction = await check_false_premise_llm(question, detected_lang, llm_client)
         if false_premise_correction:
             await self.memory.add_message(user_id, "user", question)
@@ -670,16 +678,16 @@ NovaCortex لا يعطيك نصائح، بل يعطيك خريطة الطريق 
             }
         sub_questions = await self.split_complex_question(question, detected_lang)
         if len(sub_questions) > 1:
-            all_responses = []
+            all_results = []
             for sub_q in sub_questions:
                 res = await self._process_single_question(sub_q, user_id, study_level, detected_lang)
-                all_responses.append(res["response"])
+                all_results.append(res)
             return {
-                "response": "\n".join(all_responses),
+                "response": "\n\n".join(res["response"] for res in all_results),
                 "source": "multi_query",
-                "confidence": 100,
+                "confidence": min((res.get("confidence", 0) for res in all_results), default=0),
                 "response_time_ms": int((time.time() - start_time) * 1000),
-                "docs_retrieved": 0
+                "docs_retrieved": sum(res.get("docs_retrieved", 0) for res in all_results)
             }
         return await self._process_single_question(question, user_id, study_level, detected_lang)
     async def _process_single_question(self, question: str, user_id: int, study_level: str, detected_lang: str) -> Dict:
@@ -815,37 +823,9 @@ NovaCortex لا يعطيك نصائح، بل يعطيك خريطة الطريق 
                 await self.memory.add_message(user_id, "assistant", sos_result["response"])
                 sos_result["response_time_ms"] = int((time.time() - start_time) * 1000)
                 return sos_result
-        # ===== FIX 6: معالجة الأسئلة الاستشارية =====
-        advisory_kw = [
-            'تنصحني', 'تنصح', 'انصح', 'هل ينفع', 'هل يستاهل', 'هل يستحق',
-            'recommend', 'should i', 'worth it', 'هل تنصح',
-            'رأيك في', 'what do you think',
-            'هل تقترح', 'هل تقترحين', 'هل توصي'
-        ]
-        # لا نعتبر سؤال المقارنة المعلوماتية "استشارة" — يعالج لاحقاً في comparison handler
-        _comparison_kws = ['الفرق بين', 'فرق بين', 'مقارنة', 'difference between', 'compare', 'شو الفرق']
-        _is_comparison_q = any(kw in question.lower() for kw in _comparison_kws)
-        if any(kw in question.lower() for kw in advisory_kw) and not _is_comparison_q:
-            if detected_lang == "ar":
-                advisory_msg = (
-                    "لا أستطيع تقديم نصيحة شخصية، لكن يمكنني مساعدتك بمعلومات موضوعية عن الجامعة:\n\n"
-                    "📋 جامعة اليرموك جامعة حكومية معتمدة تأسست عام 1976\n"
-                    "🎓 تضم 16 كلية وتقدم برامج البكالوريوس والماجستير والدكتوراه\n"
-                    "🌐 للتفاصيل والقبول: https://admreg.yu.edu.jo\n\n"
-                    "هل تريد معلومات عن تخصص معين أو شروط القبول؟"
-                )
-            else:
-                advisory_msg = (
-                    "I can't offer personal recommendations, but I can provide objective information about the university.\n\n"
-                    "📋 Yarmouk University is an accredited public university founded in 1976\n"
-                    "🎓 It has 16 faculties offering Bachelor's, Master's, and PhD programs\n"
-                    "🌐 For details: https://admreg.yu.edu.jo\n\n"
-                    "Would you like information about a specific major or admission requirements?"
-                )
-            await self.memory.add_message(user_id, "user", question)
-            await self.memory.add_message(user_id, "assistant", advisory_msg)
-            return {"response": advisory_msg, "source": "verified_facts", "confidence": 90,
-                    "response_time_ms": int((time.time() - start_time) * 1000), "docs_retrieved": 0}
+        # Advisory questions continue through facts/RAG so the answer can use
+        # the student's actual major and evidence instead of returning the
+        # same generic university paragraph for every recommendation request.
         if is_comparison_question(question):
             # ✅ FIX: نفرّق بين نوعين من المقارنة:
             # 1) "مين أحسن / أفضل" → رأي شخصي → نرفض
@@ -893,7 +873,7 @@ NovaCortex لا يعطيك نصائح، بل يعطيك خريطة الطريق 
         if proxied_question != question:
             logger.info(f"Question proxied: '{question}' → '{proxied_question}'")
         context = self.memory.get_context(user_id, max_messages=6)
-        parsed_intent = self.semantic_parser.parse(proxied_question)
+        parsed_intent = await asyncio.to_thread(self.semantic_parser.parse, proxied_question)
         response_depth = parsed_intent.get("response_depth", "moderate")
         enriched_question = proxied_question
         if context:
@@ -1091,25 +1071,37 @@ NovaCortex لا يعطيك نصائح، بل يعطيك خريطة الطريق 
         ]
         return any(phrase in q_lower for phrase in time_sensitive)
     async def _rag_path(self, question: str, study_level: str, language: str, context: List[Dict], response_depth: str = "moderate", parsed_intent: Dict = None) -> Dict:
-        docs_with_scores = self.retriever.retrieve(question, final_k=8)
+        docs_with_scores = await asyncio.to_thread(self.retriever.retrieve, question, final_k=8)
         if not docs_with_scores:
             return await self._web_search_path(question, study_level, language, response_depth, _from_rag=True)
         # Apply LLM re-ranking
-        reranked = reranker.rerank(question, docs_with_scores, top_k=4)
+        reranked = await asyncio.to_thread(reranker.rerank, question, docs_with_scores, top_k=4)
+        evidence_confidence = retrieval_confidence(question, reranked)
+        if evidence_confidence < 55:
+            logger.info(
+                "[RAG→WEB] Evidence below threshold (%s) for: '%s'",
+                evidence_confidence, question[:50]
+            )
+            return await self._web_search_path(
+                question, study_level, language, response_depth, _from_rag=True
+            )
         docs = [doc for doc, score in reranked]
         # Include metadata for source attribution
         raw_parts = []
-        sources_used = set()
+        sources_used = []
         for doc in docs:
             raw_parts.append(doc.page_content)
             src = doc.metadata.get('title', doc.metadata.get('source', ''))
-            if src:
-                sources_used.add(src)
+            if src and src not in sources_used:
+                sources_used.append(src)
         raw_data = "\n".join(raw_parts)[:3500]
         history_str = ""
         if context:
             history_str = self.memory.format_context_for_llm(context)
-        llm_result = llm_generator.generate_answer(question, raw_data, language, history=history_str, response_depth=response_depth, parsed_intent=parsed_intent)
+        llm_result = await asyncio.to_thread(
+            llm_generator.generate_answer, question, raw_data, language,
+            history=history_str, response_depth=response_depth, parsed_intent=parsed_intent
+        )
         if not llm_result["success"] or not llm_result["answer"]:
             return await self._web_search_path(question, study_level, language, response_depth, _from_rag=True)
         answer = llm_result["answer"]
@@ -1128,12 +1120,12 @@ NovaCortex لا يعطيك نصائح، بل يعطيك خريطة الطريق 
                 return web_result
         # Add source attribution
         if sources_used and len(answer) > 30 and not rag_failed:
-            top_source = list(sources_used)[0]
+            top_source = sources_used[0]
             if language == "ar":
                 answer += f"\n\n📌 المصدر: {top_source}"
             else:
                 answer += f"\n\n📌 Source: {top_source}"
-        confidence = 40 if rag_failed else 80
+        confidence = min(40, evidence_confidence) if rag_failed else evidence_confidence
         return {"response": answer, "source": "rag", "confidence": confidence, "docs_retrieved": len(docs)}
     async def _web_search_path(
         self,
@@ -1152,17 +1144,35 @@ NovaCortex لا يعطيك نصائح، بل يعطيك خريطة الطريق 
             )
             if name_match:
                 faculty_name = name_match.group(1).strip()
-        results = web_searcher.search_multi(question, study_level, is_faculty_search, faculty_name)
-        combined_snippets = web_searcher.combine_top_snippets(results, top_n=3)
+        results = await asyncio.to_thread(
+            web_searcher.search_multi, question, study_level, is_faculty_search, faculty_name
+        )
+        grounded_context = await asyncio.to_thread(
+            web_searcher.build_grounded_context, results, top_n=3
+        )
+        combined_snippets = grounded_context or web_searcher.combine_top_snippets(results, top_n=3)
+        evidence_confidence = web_confidence(question, results, grounded_context)
         if combined_snippets and len(combined_snippets) >= 40:
-            llm_result = llm_generator.generate_answer(
+            llm_result = await asyncio.to_thread(
+                llm_generator.generate_answer,
                 question, combined_snippets, language, response_depth=response_depth
             )
             if llm_result["success"] and llm_result["answer"]:
+                source_links = []
+                for item in results[:3]:
+                    link = (item.get("link") or "").strip()
+                    if link and link not in source_links:
+                        source_links.append(link)
+                answer = llm_result["answer"]
+                if source_links:
+                    label = "المصادر" if language == "ar" else "Sources"
+                    answer += "\n\n📌 " + label + ":\n" + "\n".join(
+                        f"• {link}" for link in source_links
+                    )
                 return {
-                    "response": llm_result["answer"],
+                    "response": answer,
                     "source": "web",
-                    "confidence": 75,
+                    "confidence": evidence_confidence,
                     "docs_retrieved": len(results)
                 }
         logger.warning(f"[IMPROVEMENT 2] All sources failed for: '{question[:60]}' - using LLM fallback")
@@ -1207,7 +1217,8 @@ NovaCortex لا يعطيك نصائح، بل يعطيك خريطة الطريق 
                         f"Question: {question}"
                     )
                     note = "\n\n⚠️ *This information may need verification at: yu.edu.jo*"
-            response = llm_client.chat.completions.create(
+            response = await asyncio.to_thread(
+                llm_client.chat.completions.create,
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,

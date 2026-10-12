@@ -5,16 +5,46 @@ import logging
 import re
 import time
 
+from html.parser import HTMLParser
 from typing import List, Optional, Dict
+from urllib.parse import urlparse
 
 import requests
 
 from novacortex.config import CURRENT_YEAR, SERPER_API_KEY
 from novacortex.knowledge.keywords import FEES_KEYWORDS, SCHOLARSHIP_KEYWORDS
+from novacortex.quality import is_official_yu_url
 from novacortex.rag.pdf import PDFExtractor
 from novacortex.text import arabic_processor
 
 logger = logging.getLogger(__name__)
+
+
+class _VisibleTextParser(HTMLParser):
+    """Small dependency-free HTML text extractor for official pages."""
+
+    def __init__(self):
+        super().__init__()
+        self._ignored_depth = 0
+        self.parts = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() in {"script", "style", "noscript", "svg"}:
+            self._ignored_depth += 1
+
+    def handle_endtag(self, tag):
+        if tag.lower() in {"script", "style", "noscript", "svg"} and self._ignored_depth:
+            self._ignored_depth -= 1
+
+    def handle_data(self, data):
+        if not self._ignored_depth:
+            cleaned = re.sub(r"\s+", " ", data).strip()
+            if cleaned:
+                self.parts.append(cleaned)
+
+    def text(self) -> str:
+        return "\n".join(self.parts)
+
 
 # ==================== DEEP FACULTY SEARCH ====================
 def generate_deep_faculty_query(question: str, faculty_name: str = None) -> List[str]:
@@ -77,6 +107,10 @@ class EnhancedWebSearcher:
         self.min_delay = 0.5
         self.pdf_extractor = PDFExtractor()
         self.faculty_site = "site:fmd.yu.edu.jo"
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": "NovaCortex/14 (+https://yu.edu.jo)"
+        })
     # ==================== TIME-AWARE SEARCH ====================
     TIME_SENSITIVE_KW = [
         'موعد', 'مواعيد', 'آخر موعد', 'deadline', 'تسجيل', 'registration',
@@ -143,9 +177,13 @@ class EnhancedWebSearcher:
             if link not in seen_links:
                 seen_links.add(link)
                 score = 0
-                if is_faculty_search and 'fmd.yu.edu.jo' in link:
+                try:
+                    host = (urlparse(link).hostname or "").lower()
+                except ValueError:
+                    host = ""
+                if is_faculty_search and (host == 'fmd.yu.edu.jo' or host.endswith('.fmd.yu.edu.jo')):
                     score += 100
-                elif 'yu.edu.jo' in link:
+                elif is_official_yu_url(link):
                     score += 50
                 if '.pdf' in link.lower():
                     score += 40
@@ -170,4 +208,41 @@ class EnhancedWebSearcher:
         combined = "\n\n".join(snippets)
         logger.info(f"[IMPROVEMENT 1] Combined {len(snippets)} snippets ({len(combined)} chars)")
         return combined
+
+    def _fetch_official_page(self, url: str, max_chars: int = 6000) -> str:
+        if not is_official_yu_url(url):
+            return ""
+        try:
+            response = self.session.get(url, timeout=(5, 15), allow_redirects=True)
+            response.raise_for_status()
+            if not is_official_yu_url(response.url):
+                return ""
+            content_type = response.headers.get("Content-Type", "").lower()
+            if "application/pdf" in content_type:
+                result = self.pdf_extractor.fetch_and_extract(
+                    response.url, max_pages=12, allowed_domain="yu.edu.jo"
+                )
+                return result.get("text", "")[:max_chars] if result.get("success") else ""
+            if "html" not in content_type and "text" not in content_type:
+                return ""
+            parser = _VisibleTextParser()
+            parser.feed(response.text[:1_500_000])
+            return parser.text()[:max_chars]
+        except Exception as exc:
+            logger.warning("Official page fetch failed for %s: %s", url, exc)
+            return ""
+
+    def build_grounded_context(self, results: List[Dict], top_n: int = 3) -> str:
+        """Read official result pages and fall back to snippets per result."""
+        blocks = []
+        for index, result in enumerate(results[:top_n], 1):
+            title = (result.get("title") or "").strip()
+            link = (result.get("link") or "").strip()
+            page_text = self._fetch_official_page(link)
+            evidence = page_text or (result.get("snippet") or "").strip()
+            if len(evidence) < 40:
+                continue
+            label = f"[المصدر {index} - {title}]\nالرابط: {link}\n"
+            blocks.append(label + evidence)
+        return "\n\n".join(blocks)
 web_searcher = EnhancedWebSearcher()

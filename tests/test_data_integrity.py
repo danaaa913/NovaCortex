@@ -29,7 +29,7 @@ REQUIRED_PROGRAMS = [
 # Every marker must appear somewhere in the refactored sources.
 SOURCE_MARKERS = {
     "FIX 1 - _fix_reversed_arabic": "_fix_reversed_arabic",
-    "FIX 2 - MAX_CHUNKS_PER_DOC": "MAX_CHUNKS_PER_DOC",
+    "No destructive chunk truncation": "Keep every chunk",
     "FIX 2 - priority boost": "priority == 1",
     "FIX 4 - EXTERNAL_PLANS_TITLE_MAP": "EXTERNAL_PLANS_TITLE_MAP",
     "FIX 5 - _found_in_facts": "_found_in_facts",

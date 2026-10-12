@@ -3,6 +3,7 @@
 import logging
 import sqlite3
 
+from contextlib import closing
 from datetime import datetime
 
 from novacortex.config import DB_PATH
@@ -12,8 +13,10 @@ logger = logging.getLogger(__name__)
 # ==================== DATABASE ====================
 def init_db():
     db_name = str(DB_PATH)
-    with sqlite3.connect(db_name) as conn:
+    with closing(sqlite3.connect(db_name)) as conn:
         c = conn.cursor()
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA foreign_keys=ON")
         c.execute("""CREATE TABLE IF NOT EXISTS users (
             telegram_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, role TEXT DEFAULT 'visitor',
             uni_id TEXT, study_level TEXT DEFAULT 'بكالوريوس', created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -37,29 +40,38 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, message_index INTEGER, role TEXT,
             content TEXT, timestamp TEXT, is_summary INTEGER DEFAULT 0
         )""")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_questions_user ON questions_log(user_id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_memory_user ON conversation_memory(user_id, message_index)")
         conn.commit()
     logger.info("Database initialized (novacortex_v12.db)")
 def save_user(telegram_id, username=None, first_name=None, role="visitor", uni_id=None, study_level="بكالوريوس"):
-    with sqlite3.connect(str(DB_PATH)) as conn:
+    with closing(sqlite3.connect(str(DB_PATH))) as conn:
         c = conn.cursor()
-        c.execute("""INSERT OR REPLACE INTO users
+        c.execute("""INSERT INTO users
             (telegram_id, username, first_name, role, uni_id, study_level, last_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(telegram_id) DO UPDATE SET
+                username=excluded.username,
+                first_name=excluded.first_name,
+                role=excluded.role,
+                uni_id=excluded.uni_id,
+                study_level=excluded.study_level,
+                last_active=excluded.last_active""",
             (telegram_id, username, first_name, role, uni_id, study_level, datetime.now().isoformat()))
         conn.commit()
 def get_user(telegram_id):
-    with sqlite3.connect(str(DB_PATH)) as conn:
+    with closing(sqlite3.connect(str(DB_PATH))) as conn:
         c = conn.cursor()
         c.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
         return c.fetchone()
 def update_user_activity(telegram_id):
-    with sqlite3.connect(str(DB_PATH)) as conn:
+    with closing(sqlite3.connect(str(DB_PATH))) as conn:
         c = conn.cursor()
         c.execute("UPDATE users SET last_active = ?, total_questions = total_questions + 1 WHERE telegram_id = ?",
             (datetime.now().isoformat(), telegram_id))
         conn.commit()
 def log_question(user_id, username, question, response, source, confidence, response_time_ms, docs_retrieved, study_level):
-    with sqlite3.connect(str(DB_PATH)) as conn:
+    with closing(sqlite3.connect(str(DB_PATH))) as conn:
         c = conn.cursor()
         c.execute("""INSERT INTO questions_log
             (user_id, username, question, response, source, confidence, response_time_ms, docs_retrieved, timestamp, study_level)
@@ -67,7 +79,7 @@ def log_question(user_id, username, question, response, source, confidence, resp
             (user_id, username, question, response, source, confidence, response_time_ms, docs_retrieved, datetime.now().isoformat(), study_level))
         conn.commit()
 def update_daily_stats(source, confidence, response_time_ms):
-    with sqlite3.connect(str(DB_PATH)) as conn:
+    with closing(sqlite3.connect(str(DB_PATH))) as conn:
         c = conn.cursor()
         today = datetime.now().date().isoformat()
         c.execute("SELECT * FROM daily_stats WHERE date = ?", (today,))
@@ -84,4 +96,14 @@ def update_daily_stats(source, confidence, response_time_ms):
         else:
             c.execute("INSERT INTO daily_stats VALUES (?, 1, ?, ?, ?, ?, ?)",
                 (today, 1 if source=='cache' else 0, 1 if source=='rag' else 0, 1 if source=='web' else 0, confidence, response_time_ms))
+        conn.commit()
+
+
+def delete_user_data(user_id: int) -> None:
+    """Delete the user's profile, question log and conversation memory."""
+    with closing(sqlite3.connect(str(DB_PATH))) as conn:
+        c = conn.cursor()
+        c.execute("DELETE FROM conversation_memory WHERE user_id = ?", (user_id,))
+        c.execute("DELETE FROM questions_log WHERE user_id = ?", (user_id,))
+        c.execute("DELETE FROM users WHERE telegram_id = ?", (user_id,))
         conn.commit()

@@ -39,6 +39,7 @@ dashboard_output/
 *.zip
 synthetic_questions.json
 progress.json
+evaluation_failures.json
 
 # ---------------------------------------------------------------- editors / OS
 .vscode/

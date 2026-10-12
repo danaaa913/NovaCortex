@@ -20,12 +20,14 @@ remains only as a thin compatibility shim.
 - **Guardrails** — out-of-scope detection, prompt-injection blocking,
   false-premise correction and comparison-request refusal.
 - **Semantic cache** — SQLite-backed cosine cache with a tunable similarity
-  threshold (0.88) so rephrased questions reuse previous answers.
+  threshold (0.88). Time-sensitive, person-specific and numeric questions are
+  excluded so a similar old question cannot reuse a stale answer.
 - **Memory** — per-user conversation history with rolling summaries.
 - **Bilingual NLP** — Arabic normalisation/tokenisation/stemming (NLTK
   Snowball) and language detection with an Arabic-dominance threshold.
 - **Auto-reindex** — MD5 of `data/yarmouk_data.json` is cached; the vector
-  store rebuilds itself when the knowledge base changes.
+  store rebuilds itself when the knowledge base changes without dropping the
+  middle sections of long source documents.
 
 ## Requirements
 
@@ -78,7 +80,9 @@ novacortex                    # if installed with `pip install -e .`
 ```
 
 Bot commands: `/start` (registration conversation), `/clear` (wipe memory),
-`/cancel` (abort conversation), then ask anything in the free-text handler.
+`/privacy` (show stored-data information), `/delete_my_data CONFIRM` (delete
+the profile, question log and memory), `/cancel` (abort conversation), then
+ask anything in the free-text handler.
 
 ## Project layout
 
@@ -129,6 +133,8 @@ python tests/test_data_integrity.py # standalone, no pytest needed
   regression-marker checks over the whole package.
 - `tests/test_unit_text.py` — Arabic normalisation / language detection.
 - `tests/test_unit_knowledge.py` — static knowledge + config sanity.
+- `tests/golden_questions.json` + `scripts/evaluate_answers.py` — content-level
+  evaluation of sources, required facts, forbidden claims and abstention.
 - `tests/test_bot_internal.py` — end-to-end agent test, **skipped unless**
   `NOVACORTEX_RUN_INTEGRATION=1` (needs a working environment + network).
 

@@ -201,8 +201,9 @@ Return ONLY the JSON, no other text."""
         _gates_kw = ['بوابة', 'بوابات', 'gate', 'gates', 'مدخل', 'مداخل', 'بوابه']
         if any(kw in q_key for kw in _gates_kw):
             return {"intent_key": "university_gates", "entity": None, "response_depth": response_depth}
-        if any(kw in q_key for kw in ['ساعة', 'ساعات', 'hours', 'credit']):
-            return {"intent_key": "credit_hours", "entity": "program", "response_depth": response_depth}
+        # Do not route the bare word "ساعة" to credit hours.  It can mean
+        # office hours, opening time or clock time.  The specific graduation
+        # and credit-hour phrases above are the safe rule-based route.
         # ===== FIX: رئيس الجامعة — rule-based بدون LLM =====
         _president_kw = ['رئيس الجامعه', 'رئيس الجامعة', 'رئيس اليرموك',
                          'مين رئيس', 'من رئيس', 'university president',
