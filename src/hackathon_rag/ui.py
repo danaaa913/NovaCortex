@@ -72,9 +72,15 @@ def main() -> None:
                                 location += f" — page {citation['page']}"
                             if citation.get("section"):
                                 location += f" — {citation['section']}"
-                            st.markdown(f"- **{location}**")
+                            with st.expander(location):
+                                if citation.get("reason"):
+                                    st.caption(citation["reason"])
+                                st.write(citation.get("evidence", ""))
                     with st.expander("Retrieval details"):
                         st.json(result.retrieved)
-                    st.caption(f"Answer latency: {result.latency_ms} ms")
+                    with st.expander("Workflow timings"):
+                        st.write(" → ".join(result.workflow))
+                        st.json(result.timings_ms)
+                    st.caption(f"Total answer latency: {result.latency_ms} ms")
                 except Exception as exc:
                     st.error(str(exc))

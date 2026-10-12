@@ -12,9 +12,10 @@ from hackathon_rag.cleaning import clean_text, remove_repeated_page_lines  # noq
 from hackathon_rag.config import HackathonConfig  # noqa: E402
 from hackathon_rag.loaders import load_documents  # noqa: E402
 from hackathon_rag.answering import GroundedAnswerer  # noqa: E402
-from hackathon_rag.models import Chunk, ParentSection, RetrievedChunk, SourceUnit  # noqa: E402
+from hackathon_rag.models import Answer, Chunk, ParentSection, RetrievedChunk, SourceUnit  # noqa: E402
 from hackathon_rag.retrieval import HybridRetriever, LightweightBM25, tokenize  # noqa: E402
 from hackathon_rag.pipeline import HackathonRAG  # noqa: E402
+from hackathon_rag.workflow import DeterministicRAGWorkflow  # noqa: E402
 
 
 def test_cleaning_removes_web_noise_and_preserves_lines():
@@ -156,6 +157,52 @@ def test_dependency_free_document_loaders():
         assert "Visible text" in combined and "bad()" not in combined
         assert "policy.days: 14" in combined
         assert "name: alpha" in combined
+
+
+def test_loader_reports_empty_scanned_pdf_candidate_without_hiding_good_files():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        (root / "notes.txt").write_text("Searchable content.", encoding="utf-8")
+        (root / "scan.pdf").write_bytes(b"not a valid pdf")
+        diagnostics = {}
+        units = load_documents(root, diagnostics=diagnostics)
+        assert units
+        assert diagnostics["ok"] == 1
+        assert diagnostics["needs_attention"] == 1
+        assert diagnostics["files"][1]["status"] == "error"
+
+
+def test_deterministic_langgraph_workflow_records_fixed_steps_when_available():
+    try:
+        import langgraph  # noqa: F401
+    except ImportError:
+        return
+
+    calls = []
+    chunk = Chunk("a", "pa", "context", "context", "rules.pdf", page=2)
+
+    def retrieve(question):
+        calls.append("retrieve")
+        return [RetrievedChunk(chunk, score=0.1)]
+
+    def load_parents():
+        calls.append("parents")
+        return {"pa": ParentSection("pa", "evidence", "rules.pdf", page=2)}
+
+    def answer(question, retrieved, parents):
+        calls.append("answer")
+        return Answer("supported", True)
+
+    workflow = DeterministicRAGWorkflow(retrieve, load_parents, answer)
+    result = workflow.invoke("  valid question  ")
+    assert calls == ["retrieve", "parents", "answer"]
+    assert result.workflow == [
+        "validate_question",
+        "retrieve_evidence",
+        "load_parent_context",
+        "generate_grounded_answer",
+    ]
+    assert set(result.timings_ms) == set(result.workflow)
 
 
 if __name__ == "__main__":

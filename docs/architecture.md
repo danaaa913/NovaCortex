@@ -1,5 +1,24 @@
 # NovaCortex — Architecture
 
+## Local hackathon document assistant
+
+The separate `src/hackathon_rag/` package is a local, generic document assistant.
+It uses custom structure-aware loaders and chunking, Chroma vector search, BM25
+and reciprocal-rank fusion. `workflow.py` wraps question answering in a fixed
+LangGraph workflow: validate question → retrieve evidence → load parent context
+→ generate a cited answer. The graph contains no autonomous tool selection or
+open loop.
+
+`mcp_server.py` is an optional adapter over the same `HackathonRAG` engine used
+by the CLI and Streamlit UI. It exposes document search, grounded answering,
+source-page lookup and index status without duplicating retrieval logic.
+
+The ingestion report records successful, empty and failed files. Tables from
+PDF, DOCX, PPTX and XLSX are normalized to Markdown while retaining source,
+page/slide and section metadata. Scanned or visually complex pages remain an
+explicit OCR/visual-processing limitation rather than being silently indexed as
+empty content.
+
 NovaCortex is a layered Telegram bot: a thin transport layer, an agent that
 owns the request lifecycle, a hybrid answer pipeline (facts → cache → RAG →
 web → LLM), and static knowledge/RAG subpackages. Everything is wired in

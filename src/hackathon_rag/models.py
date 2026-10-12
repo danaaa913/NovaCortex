@@ -65,6 +65,8 @@ class Answer:
     citations: List[Dict[str, Any]] = field(default_factory=list)
     retrieved: List[Dict[str, Any]] = field(default_factory=list)
     latency_ms: int = 0
+    timings_ms: Dict[str, int] = field(default_factory=dict)
+    workflow: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

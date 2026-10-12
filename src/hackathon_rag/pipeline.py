@@ -14,6 +14,7 @@ from .models import Answer, RetrievedChunk
 from .ollama_client import OllamaClient
 from .retrieval import HybridRetriever
 from .store import DocumentStore
+from .workflow import DeterministicRAGWorkflow
 
 
 class HackathonRAG:
@@ -23,10 +24,12 @@ class HackathonRAG:
         self.ollama = OllamaClient(self.config.ollama_base_url, self.config.request_timeout)
         self.store = DocumentStore(self.config.index_dir, self.config.collection_name)
         self._retriever = None
+        self._workflow = None
 
     def ingest(self, reset: bool = True) -> dict:
         inventory = document_inventory(self.config.documents_dir)
-        units = load_documents(self.config.documents_dir)
+        extraction = {}
+        units = load_documents(self.config.documents_dir, diagnostics=extraction)
         parents, chunks = build_chunks(
             units,
             parent_size=self.config.parent_size,
@@ -44,14 +47,17 @@ class HackathonRAG:
         )
         manifest["inventory"] = inventory
         manifest["extracted_units"] = len(units)
+        manifest["extraction"] = extraction
         self.store.manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         self._retriever = None
+        self._workflow = None
         return manifest
 
     def preview(self, output_path: Path | None = None, sample_count: int = 30) -> dict:
         """Inspect extraction and chunks before downloading models or embedding."""
         inventory = document_inventory(self.config.documents_dir)
-        units = load_documents(self.config.documents_dir)
+        extraction = {}
+        units = load_documents(self.config.documents_dir, diagnostics=extraction)
         parents, chunks = build_chunks(
             units,
             parent_size=self.config.parent_size,
@@ -85,6 +91,7 @@ class HackathonRAG:
                 "below_configured_minimum": sum(length < self.config.min_chunk_size for length in lengths),
             },
             "sources": sorted({chunk.source for chunk in chunks}),
+            "extraction": extraction,
             "samples": [
                 {
                     "source": chunk.source,
@@ -132,10 +139,14 @@ class HackathonRAG:
         return self._get_retriever().retrieve(question)
 
     def ask(self, question: str) -> Answer:
-        retrieved = self.retrieve(question)
-        parents = self.store.load_parents()
-        answerer = GroundedAnswerer(self.ollama, self.config.chat_model, self.config.max_context_chars)
-        return answerer.answer(question, retrieved, parents)
+        if self._workflow is None:
+            answerer = GroundedAnswerer(self.ollama, self.config.chat_model, self.config.max_context_chars)
+            self._workflow = DeterministicRAGWorkflow(
+                retrieve=self.retrieve,
+                load_parents=self.store.load_parents,
+                answer=answerer.answer,
+            )
+        return self._workflow.invoke(question)
 
     def doctor(self) -> dict:
         import importlib.util
@@ -148,6 +159,8 @@ class HackathonRAG:
             "pptx": "pptx",
             "openpyxl": "openpyxl",
             "streamlit": "streamlit",
+            "langgraph": "langgraph",
+            "mcp": "mcp",
         }
         result = {
             "ollama_url": self.config.ollama_base_url,

@@ -11,6 +11,10 @@ conversation memory.
 > dependency. Start with `python hackathon.py preview`; the Arabic preparation
 > guide is in `docs/hackathon-prep-ar.md`.
 
+The hackathon assistant uses a deterministic LangGraph workflow around its
+hybrid retrieval and grounded answer components. An optional MCP server exposes
+the same engine to compatible clients through `python hackathon_mcp.py`.
+
 The implementation used to live in a single ~4,200-line `NovaCortexbot.py`.
 It is now a normal Python package under `src/novacortex/`; the original file
 remains only as a thin compatibility shim.

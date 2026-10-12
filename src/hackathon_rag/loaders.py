@@ -4,7 +4,7 @@ import csv
 import json
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Iterable, List
+from typing import Dict, Iterable, List, Optional
 
 from .cleaning import clean_text, remove_repeated_page_lines
 from .models import SourceUnit
@@ -43,7 +43,25 @@ def _relative(path: Path, root: Path) -> str:
         return path.name
 
 
-def _load_pdf(path: Path, source: str) -> List[SourceUnit]:
+def _table_markdown(rows) -> str:
+    """Render a table as searchable text while preserving columns and headers."""
+    values = []
+    for row in rows:
+        cells = [clean_text("" if cell is None else str(cell)).replace("|", "\\|") for cell in row]
+        if any(cells):
+            values.append(cells)
+    if not values:
+        return ""
+    width = max(len(row) for row in values)
+    values = [row + [""] * (width - len(row)) for row in values]
+    header = values[0]
+    body = values[1:]
+    lines = ["| " + " | ".join(header) + " |", "| " + " | ".join(["---"] * width) + " |"]
+    lines.extend("| " + " | ".join(row) + " |" for row in body)
+    return "\n".join(lines)
+
+
+def _load_pdf(path: Path, source: str, stats: Optional[Dict] = None) -> List[SourceUnit]:
     try:
         import pdfplumber
     except ImportError as exc:
@@ -53,6 +71,14 @@ def _load_pdf(path: Path, source: str) -> List[SourceUnit]:
         total_pages = len(pdf.pages)
         for number, page in enumerate(pdf.pages, 1):
             text = page.extract_text(x_tolerance=2, y_tolerance=3) or ""
+            tables = []
+            try:
+                tables = [_table_markdown(table) for table in page.extract_tables()]
+                tables = [table for table in tables if table]
+            except Exception:
+                tables = []
+            if tables:
+                text = text + "\n\n" + "\n\n".join(f"[Table]\n{table}" for table in tables)
             if clean_text(text):
                 units.append(SourceUnit(text=text, source=source, page=number, document_type="pdf"))
     if total_pages and len(units) < total_pages / 2:
@@ -60,6 +86,8 @@ def _load_pdf(path: Path, source: str) -> List[SourceUnit]:
             f"Warning: {source} yielded text from only {len(units)}/{total_pages} pages; "
             "it may be scanned and require OCR."
         )
+    if stats is not None:
+        stats.update({"total_pages": total_pages, "pages_with_text": len(units)})
     return units
 
 
@@ -85,10 +113,14 @@ def _load_docx(path: Path, source: str) -> List[SourceUnit]:
         paragraphs.append(text)
     if paragraphs:
         units.append(SourceUnit("\n".join(paragraphs), source, section=section, document_type="docx"))
+    for index, table in enumerate(document.tables, 1):
+        text = _table_markdown([[cell.text for cell in row.cells] for row in table.rows])
+        if text:
+            units.append(SourceUnit(text, source, section=f"Table {index}", document_type="docx_table"))
     return units
 
 
-def _load_pptx(path: Path, source: str) -> List[SourceUnit]:
+def _load_pptx(path: Path, source: str, stats: Optional[Dict] = None) -> List[SourceUnit]:
     try:
         from pptx import Presentation
     except ImportError as exc:
@@ -96,9 +128,18 @@ def _load_pptx(path: Path, source: str) -> List[SourceUnit]:
     presentation = Presentation(path)
     units = []
     for number, slide in enumerate(presentation.slides, 1):
-        texts = [shape.text for shape in slide.shapes if hasattr(shape, "text") and shape.text.strip()]
+        texts = []
+        for shape in slide.shapes:
+            if getattr(shape, "has_table", False):
+                table = _table_markdown([[cell.text for cell in row.cells] for row in shape.table.rows])
+                if table:
+                    texts.append(f"[Table]\n{table}")
+            elif hasattr(shape, "text") and shape.text.strip():
+                texts.append(shape.text)
         if texts:
             units.append(SourceUnit("\n".join(texts), source, page=number, document_type="pptx"))
+    if stats is not None:
+        stats.update({"total_pages": len(presentation.slides), "pages_with_text": len(units)})
     return units
 
 
@@ -110,13 +151,9 @@ def _load_xlsx(path: Path, source: str) -> List[SourceUnit]:
     workbook = load_workbook(path, read_only=True, data_only=True)
     units = []
     for sheet in workbook.worksheets:
-        rows = []
-        for row in sheet.iter_rows(values_only=True):
-            values = [str(value).strip() if value is not None else "" for value in row]
-            if any(values):
-                rows.append(" | ".join(values))
-        if rows:
-            units.append(SourceUnit("\n".join(rows), source, section=sheet.title, document_type="xlsx"))
+        text = _table_markdown(sheet.iter_rows(values_only=True))
+        if text:
+            units.append(SourceUnit(text, source, section=sheet.title, document_type="xlsx"))
     return units
 
 
@@ -135,15 +172,15 @@ def _json_text(value, prefix="") -> List[str]:
     return [f"{prefix}: {value}"]
 
 
-def load_file(path: Path, root: Path) -> List[SourceUnit]:
+def load_file(path: Path, root: Path, stats: Optional[Dict] = None) -> List[SourceUnit]:
     source = _relative(path, root)
     suffix = path.suffix.lower()
     if suffix == ".pdf":
-        return _load_pdf(path, source)
+        return _load_pdf(path, source, stats)
     if suffix == ".docx":
         return _load_docx(path, source)
     if suffix == ".pptx":
-        return _load_pptx(path, source)
+        return _load_pptx(path, source, stats)
     if suffix == ".xlsx":
         return _load_xlsx(path, source)
     if suffix in {".txt", ".md"}:
@@ -163,7 +200,7 @@ def load_file(path: Path, root: Path) -> List[SourceUnit]:
     return []
 
 
-def load_documents(directory: Path) -> List[SourceUnit]:
+def load_documents(directory: Path, diagnostics: Optional[Dict] = None) -> List[SourceUnit]:
     if not directory.exists():
         raise FileNotFoundError(f"Documents directory does not exist: {directory}")
     paths = sorted(path for path in directory.rglob("*") if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS)
@@ -171,11 +208,44 @@ def load_documents(directory: Path) -> List[SourceUnit]:
         raise RuntimeError(f"No supported documents found in {directory}")
     units = []
     failures = []
+    files = []
     for path in paths:
+        source = _relative(path, directory)
         try:
-            units.extend(load_file(path, directory))
+            file_stats = {}
+            loaded = load_file(path, directory, file_stats)
+            units.extend(loaded)
+            status = "ok" if loaded else "empty"
+            message = ""
+            if not loaded and path.suffix.lower() == ".pdf":
+                status = "needs_ocr"
+                message = "No searchable text was extracted; inspect the PDF and enable OCR if it is scanned."
+            elif file_stats.get("total_pages", 0) > file_stats.get("pages_with_text", 0):
+                status = "partial"
+                message = "Some pages or slides yielded no searchable text; inspect them for scans or visual-only content."
+            files.append({
+                "source": source,
+                "type": path.suffix.lower(),
+                "status": status,
+                "extracted_units": len(loaded),
+                "pages_with_text": file_stats.get(
+                    "pages_with_text", len({unit.page for unit in loaded if unit.page is not None})
+                ),
+                "total_pages": file_stats.get("total_pages"),
+                "message": message,
+            })
         except Exception as exc:
-            failures.append(f"{_relative(path, directory)}: {exc}")
+            failure = f"{source}: {exc}"
+            failures.append(failure)
+            files.append({
+                "source": source,
+                "type": path.suffix.lower(),
+                "status": "error",
+                "extracted_units": 0,
+                "pages_with_text": 0,
+                "total_pages": None,
+                "message": str(exc),
+            })
     if not units:
         raise RuntimeError("No text could be extracted. " + "; ".join(failures))
     cleaned = []
@@ -184,6 +254,13 @@ def load_documents(directory: Path) -> List[SourceUnit]:
         if text:
             cleaned.append(SourceUnit(text, unit.source, unit.page, unit.section, unit.document_type))
     cleaned = remove_repeated_page_lines(cleaned)
+    if diagnostics is not None:
+        diagnostics.update({
+            "files": files,
+            "ok": sum(item["status"] == "ok" for item in files),
+            "needs_attention": sum(item["status"] != "ok" for item in files),
+            "failures": failures,
+        })
     if failures:
         print("Warnings while loading documents:")
         for failure in failures:

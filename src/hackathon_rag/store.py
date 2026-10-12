@@ -47,6 +47,12 @@ class DocumentStore:
         self.index_dir.mkdir(parents=True, exist_ok=True)
         vectors = ollama.embed(embedding_model, [document_prefix + chunk.text for chunk in chunks])
         collection = self._chroma()
+        current_ids = {chunk.id for chunk in chunks}
+        if not reset:
+            existing_ids = set(collection.get().get("ids", []))
+            stale_ids = sorted(existing_ids - current_ids)
+            if stale_ids:
+                collection.delete(ids=stale_ids)
         batch_size = 200
         for start in range(0, len(chunks), batch_size):
             batch = chunks[start:start + batch_size]
