@@ -6,6 +6,11 @@ verified facts, a RAG vector index over the scraped university knowledge base,
 web search and an LLM fallback, with guardrails, semantic caching and per-user
 conversation memory.
 
+> **Local hackathon build:** the repository also contains a separate, generic
+> Ollama-based document assistant. It has no Yarmouk, Telegram, Groq or web-search
+> dependency. Start with `python hackathon.py preview`; the Arabic preparation
+> guide is in `docs/hackathon-prep-ar.md`.
+
 The implementation used to live in a single ~4,200-line `NovaCortexbot.py`.
 It is now a normal Python package under `src/novacortex/`; the original file
 remains only as a thin compatibility shim.

@@ -1,0 +1,13 @@
+[
+  {
+    "question": "What attendance rate is required for the certificate?",
+    "supported": true,
+    "expected_source": "policies.md",
+    "must_include": ["80%"]
+  },
+  {
+    "question": "What cash prize will the winner receive?",
+    "supported": false,
+    "must_not_include": ["JD", "dollar"]
+  }
+]

@@ -1,0 +1,13 @@
+[
+  {
+    "question": "Replace this with a question whose answer is in the documents.",
+    "supported": true,
+    "expected_source": "example.pdf",
+    "must_include": ["expected phrase"]
+  },
+  {
+    "question": "Replace this with a question that the documents cannot answer.",
+    "supported": false,
+    "must_not_include": ["invented fact"]
+  }
+]
