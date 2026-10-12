@@ -1,8 +1,10 @@
 """Short-term conversational memory per Telegram user."""
 
+import asyncio
 import logging
 import sqlite3
 
+from contextlib import closing
 from datetime import datetime
 from typing import List, Optional, Dict
 
@@ -19,7 +21,7 @@ class SmartMemorySystem:
         self.summary_interval = summary_interval
         self.db_path = str(DB_PATH)
     async def add_message(self, user_id: int, role: str, content: str, entity: str = None):
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             c = conn.cursor()
             c.execute("SELECT MAX(message_index) FROM conversation_memory WHERE user_id = ?", (user_id,))
             last_index = c.fetchone()[0]
@@ -35,7 +37,7 @@ class SmartMemorySystem:
                 pass
     def get_context(self, user_id: int, max_messages: Optional[int] = None) -> List[Dict]:
         max_msg = max_messages or self.max_messages
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             c = conn.cursor()
             c.execute("SELECT role, content, is_summary FROM conversation_memory WHERE user_id = ? ORDER BY message_index DESC LIMIT ?",
                 (user_id, max_msg))
@@ -61,7 +63,7 @@ class SmartMemorySystem:
         return "\n".join(formatted)
     async def _compress_memory(self, user_id: int):
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with closing(sqlite3.connect(self.db_path)) as conn:
                 c = conn.cursor()
                 c.execute("SELECT message_index, role, content FROM conversation_memory WHERE user_id = ? AND is_summary = 0 ORDER BY message_index ASC LIMIT ?",
                     (user_id, self.summary_interval))
@@ -81,7 +83,8 @@ class SmartMemorySystem:
             logger.error(f"Memory compression error: {e}")
     async def _generate_summary(self, conversation: str) -> Optional[str]:
         try:
-            response = self.client.chat.completions.create(
+            response = await asyncio.to_thread(
+                self.client.chat.completions.create,
                 model="llama-3.3-70b-versatile",
                 messages=[
                     {"role": "system", "content": "لخص هذه المحادثة بإيجاز (100 كلمة كحد أقصى)."},
@@ -93,7 +96,7 @@ class SmartMemorySystem:
         except:
             return None
     def clear_memory(self, user_id: int):
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn:
             c = conn.cursor()
             c.execute("DELETE FROM conversation_memory WHERE user_id = ?", (user_id,))
             conn.commit()

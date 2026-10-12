@@ -8,6 +8,7 @@ project root.
 import os
 import sys
 import logging
+from datetime import date
 from pathlib import Path
 from typing import List
 
@@ -29,8 +30,8 @@ os.environ['ANONYMIZED_TELEMETRY'] = 'False'
 UNIVERSITY_NAME = "جامعة اليرموك"
 
 RAG_CONFIDENCE_THRESHOLD = 0.60
-CURRENT_YEAR = 2026
-CURRENT_MONTH = 3
+CURRENT_YEAR = date.today().year
+CURRENT_MONTH = date.today().month
 
 OFFICIAL_PDFS = {
     "fees_and_majors": "https://admreg.yu.edu.jo/images/docs/majors.pdf"

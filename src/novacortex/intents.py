@@ -201,8 +201,9 @@ Return ONLY the JSON, no other text."""
         _gates_kw = ['بوابة', 'بوابات', 'gate', 'gates', 'مدخل', 'مداخل', 'بوابه']
         if any(kw in q_key for kw in _gates_kw):
             return {"intent_key": "university_gates", "entity": None, "response_depth": response_depth}
-        if any(kw in q_key for kw in ['ساعة', 'ساعات', 'hours', 'credit']):
-            return {"intent_key": "credit_hours", "entity": "program", "response_depth": response_depth}
+        # Do not route the bare word "ساعة" to credit hours.  It can mean
+        # office hours, opening time or clock time.  The specific graduation
+        # and credit-hour phrases above are the safe rule-based route.
         # ===== FIX: رئيس الجامعة — rule-based بدون LLM =====
         _president_kw = ['رئيس الجامعه', 'رئيس الجامعة', 'رئيس اليرموك',
                          'مين رئيس', 'من رئيس', 'university president',
@@ -313,10 +314,9 @@ class SmartFactsRouter:
             return None  # Let RAG handle it — demonstrates RAG capability for competition
         # ===== FIX 4: بوابات الجامعة =====
         if intent_key == "university_gates":
-            gates = VERIFIED_FACTS[lang].get("gates", {})
-            if any(kw in q_lower for kw in ['كم', 'عدد', 'how many', 'number']):
-                return gates.get("count", "3")
-            return gates.get("details", "")
+            # Campus entrances change as gates open, close or are repurposed.
+            # Let the pipeline query current official university sources.
+            return None
         if intent_key == "faculty_dean":
             deans = VERIFIED_FACTS[lang]["deans"]
             for dean_info in deans.values():
@@ -461,8 +461,7 @@ class SmartFactsRouter:
         _gates_direct_kw = ['بوابة','بوابات','gate','gates','مدخل','مداخل',
                             'البوابة الرئيسية','البوابة الشرقية','كم بوابة']
         if any(kw in q_lower for kw in _gates_direct_kw):
-            gates = VERIFIED_FACTS[lang].get("gates",{})
-            return gates.get("details","")
+            return None
 
         # ===== ساعات التخرج / credit hours =====
         _credit_kw = ['كم ساعة تخرج','ساعة تخرج','ساعات التخرج','ساعات اللازمة للتخرج',

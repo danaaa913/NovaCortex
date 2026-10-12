@@ -10,17 +10,17 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from tqdm import tqdm
-
 from novacortex.config import CHROMA_PATH, DATA_FILE
 
 logger = logging.getLogger(__name__)
 
 # ==================== DATA FILE HASH (Auto-rebuild) ====================
 DATA_HASH_FILE = Path("cache") / "data_hash.txt"
+INDEX_SCHEMA_VERSION = "2-full-document-chunks"
 def _compute_file_hash(filepath: str) -> str:
-    """Compute MD5 hash of a file for change detection."""
+    """Hash both source data and indexing rules for automatic migrations."""
     h = hashlib.md5()
+    h.update(INDEX_SCHEMA_VERSION.encode("utf-8"))
     with open(filepath, 'rb') as f:
         for chunk in iter(lambda: f.read(8192), b''):
             h.update(chunk)
@@ -88,6 +88,7 @@ def load_data_from_json():
     from langchain_chroma import Chroma
     from langchain_huggingface import HuggingFaceEmbeddings
     from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from tqdm import tqdm
 
     json_file = DATA_FILE
     if not json_file.exists():
@@ -113,11 +114,6 @@ def load_data_from_json():
                 " "
             ]
         )
-        # ✅ FIX 2: حد أقصى للـ chunks من كل وثيقة لمنع هيمنة الوثائق الضخمة
-        MAX_CHUNKS_PER_DOC = 12
-        # الوثائق ذات الأولوية العالية تأخذ حداً أعلى
-        HIGH_PRIORITY_MAX_CHUNKS = 20
-
         all_docs = []
         garbled_count = 0
         skipped_stub = 0
@@ -160,13 +156,9 @@ def load_data_from_json():
 
             chunks = splitter.create_documents([content.strip()])
 
-            # ✅ FIX 2: تطبيق الحد الأقصى للـ chunks مع الاحتفاظ بالأهم
-            max_chunks = HIGH_PRIORITY_MAX_CHUNKS if item_priority == 1 else MAX_CHUNKS_PER_DOC
-            if len(chunks) > max_chunks:
-                # خذ أول نصف وآخر نصف لتغطية بداية ونهاية الوثيقة
-                half = max_chunks // 2
-                chunks = chunks[:half] + chunks[-(max_chunks - half):]
-                logger.info(f"[TRIM] Trimmed '{fixed_title[:40]}' from {len(chunks)+max_chunks} to {max_chunks} chunks")
+            # Keep every chunk.  The old first/last-only cap silently deleted
+            # the middle of long regulations and study plans, which meant RAG
+            # could not retrieve information that was present in the source.
 
             for chunk in chunks:
                 chunk.metadata = {

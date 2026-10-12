@@ -4,6 +4,7 @@ import io
 import logging
 
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 import requests
 
@@ -17,7 +18,7 @@ class PDFExtractor:
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
-    def fetch_and_extract(self, url: str, max_pages: int = 10) -> Dict[str, Any]:
+    def fetch_and_extract(self, url: str, max_pages: int = 10, allowed_domain: str = None) -> Dict[str, Any]:
         if not url.lower().endswith('.pdf'):
             return {"text": "", "success": False, "error": "Not a PDF file", "is_garbled": False, "pages_extracted": 0}
         if url in self.cache:
@@ -25,6 +26,10 @@ class PDFExtractor:
         try:
             response = self.session.get(url, timeout=30)
             response.raise_for_status()
+            if allowed_domain:
+                host = (urlparse(response.url).hostname or "").lower().rstrip(".")
+                if host != allowed_domain and not host.endswith("." + allowed_domain):
+                    return {"text": "", "success": False, "error": "Redirected outside allowed domain", "is_garbled": False, "pages_extracted": 0}
             pdf_bytes = response.content
             import pdfplumber  # lazy: only needed when a PDF is fetched
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
