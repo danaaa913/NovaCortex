@@ -32,8 +32,8 @@
   {
     "id": "university_gates",
     "question": "كم بوابة في جامعة اليرموك؟",
-    "allowed_sources": ["verified_facts"],
-    "must_include_any": ["3", "ثلاث"]
+    "allowed_sources": ["web", "web_empty"],
+    "must_not_include": ["ثقة 100"]
   },
   {
     "id": "library_services",

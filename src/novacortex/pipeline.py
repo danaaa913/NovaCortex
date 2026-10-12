@@ -706,7 +706,7 @@ NovaCortex لا يعطيك نصائح، بل يعطيك خريطة الطريق 
             return {"response": msg, "source": "injection_blocked", "confidence": 100,
                     "response_time_ms": int((time.time() - start_time) * 1000), "docs_retrieved": 0}
 
-        # ===== VF FAST-PATH: credit hours + counselors + GPA + gates (بدون LLM) =====
+        # ===== VF FAST-PATH: credit hours + counselors + GPA (بدون LLM) =====
         q_fast = question.lower()
         # أيضاً فحص النص بعد الـ proxy (ايميل → معلومات التواصل)
         _proxied_q = apply_proxy_prompt(question).lower()
@@ -723,8 +723,6 @@ NovaCortex لا يعطيك نصائح، بل يعطيك خريطة الطريق 
              lambda: VERIFIED_FACTS[detected_lang].get("psychological_counselors",{}).get("details","")),
             (['نظام المعدل','كيف يحسب المعدل','المعدل من 100','gpa scale','من مئة'],
              lambda: VERIFIED_FACTS[detected_lang].get("gpa_scale",{}).get("details","")),
-            (['كم بوابة','البوابة الشرقية','البوابة الرئيسية','بوابات الجامعة'],
-             lambda: VERIFIED_FACTS[detected_lang].get("gates",{}).get("details","")),
         ]
         for kws, vf_fn in _vf_fast_checks:
             if any(kw in q_fast for kw in kws) or any(kw in _proxied_q for kw in kws):
@@ -1067,7 +1065,8 @@ NovaCortex لا يعطيك نصائح، بل يعطيك خريطة الطريق 
         time_sensitive = [
             'آخر موعد', 'deadline', 'أخبار', 'خبر', 'إعلان جديد',
             'متى تعيين', 'تاريخ تعيين', 'كم صارله', 'when appointed',
-            'آخر أخبار', 'latest news', 'موعد التسجيل', 'registration deadline'
+            'آخر أخبار', 'latest news', 'موعد التسجيل', 'registration deadline',
+            'كم بوابة', 'بوابات الجامعة', 'مداخل الجامعة', 'university gates',
         ]
         return any(phrase in q_lower for phrase in time_sensitive)
     async def _rag_path(self, question: str, study_level: str, language: str, context: List[Dict], response_depth: str = "moderate", parsed_intent: Dict = None) -> Dict:

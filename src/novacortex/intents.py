@@ -314,10 +314,9 @@ class SmartFactsRouter:
             return None  # Let RAG handle it — demonstrates RAG capability for competition
         # ===== FIX 4: بوابات الجامعة =====
         if intent_key == "university_gates":
-            gates = VERIFIED_FACTS[lang].get("gates", {})
-            if any(kw in q_lower for kw in ['كم', 'عدد', 'how many', 'number']):
-                return gates.get("count", "3")
-            return gates.get("details", "")
+            # Campus entrances change as gates open, close or are repurposed.
+            # Let the pipeline query current official university sources.
+            return None
         if intent_key == "faculty_dean":
             deans = VERIFIED_FACTS[lang]["deans"]
             for dean_info in deans.values():
@@ -462,8 +461,7 @@ class SmartFactsRouter:
         _gates_direct_kw = ['بوابة','بوابات','gate','gates','مدخل','مداخل',
                             'البوابة الرئيسية','البوابة الشرقية','كم بوابة']
         if any(kw in q_lower for kw in _gates_direct_kw):
-            gates = VERIFIED_FACTS[lang].get("gates",{})
-            return gates.get("details","")
+            return None
 
         # ===== ساعات التخرج / credit hours =====
         _credit_kw = ['كم ساعة تخرج','ساعة تخرج','ساعات التخرج','ساعات اللازمة للتخرج',

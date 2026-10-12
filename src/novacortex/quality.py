@@ -15,9 +15,10 @@ VOLATILE_CACHE_KEYWORDS = [
     'آخر موعد', 'موعد التسجيل', 'موعد الامتحان', 'أخبار', 'خبر', 'جديد',
     'رسوم', 'تكلفة', 'سعر', 'منحة', 'قبول', 'تعيين', 'رئيس الجامعة',
     'دكتور', 'أستاذ', 'عميد', 'هاتف', 'رقم', 'ايميل', 'إيميل',
+    'كم بوابة', 'بوابات الجامعة', 'مداخل الجامعة',
     'today', 'tomorrow', 'current', 'latest', 'deadline', 'registration',
     'fees', 'price', 'scholarship', 'admission', 'appointed', 'president',
-    'professor', 'doctor', 'dean', 'phone', 'email',
+    'professor', 'doctor', 'dean', 'phone', 'email', 'university gates',
 ]
 
 

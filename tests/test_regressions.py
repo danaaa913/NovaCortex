@@ -36,6 +36,7 @@ def test_semantic_cache_rejects_volatile_questions():
     assert not is_cacheable_question("متى موعد التسجيل للفصل الصيفي 2026؟")
     assert not is_cacheable_question("ما ايميل الدكتور أحمد؟")
     assert not is_cacheable_question("كم رسوم القبول حالياً؟")
+    assert not is_cacheable_question("كم بوابة في جامعة اليرموك؟")
     assert is_cacheable_question("ما هي خدمات المكتبة؟")
 
 
