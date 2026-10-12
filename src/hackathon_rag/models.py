@@ -67,6 +67,7 @@ class Answer:
     latency_ms: int = 0
     timings_ms: Dict[str, int] = field(default_factory=dict)
     workflow: List[str] = field(default_factory=list)
+    request_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

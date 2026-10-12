@@ -80,6 +80,33 @@ def _split_long(text: str, limit: int, overlap: int) -> List[str]:
     return [text[start:start + limit].strip() for start in range(0, len(text), step) if text[start:start + limit].strip()]
 
 
+def _split_table(text: str, limit: int) -> List[str]:
+    """Split Markdown tables by complete rows and repeat the column header."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    prefix = []
+    if lines and lines[0].casefold() == "[table]":
+        prefix.append(lines.pop(0))
+    if len(lines) < 2 or not lines[0].startswith("|") or "---" not in lines[1]:
+        return []
+    header = prefix + lines[:2]
+    rows = lines[2:]
+    if not rows:
+        return ["\n".join(header)]
+    base = "\n".join(header)
+    chunks = []
+    current_rows: List[str] = []
+    for row in rows:
+        candidate = "\n".join(header + current_rows + [row])
+        if current_rows and len(candidate) > limit:
+            chunks.append("\n".join(header + current_rows))
+            current_rows = [row]
+        else:
+            current_rows.append(row)
+    if current_rows:
+        chunks.append("\n".join(header + current_rows))
+    return chunks or [base]
+
+
 def _structural_blocks(text: str) -> List[Tuple[str, str]]:
     """Return (section title, text) blocks while retaining headings/course labels."""
     blocks = []
@@ -151,7 +178,10 @@ def build_chunks(
     for unit in units:
         for structural_section, block in _structural_blocks(unit.text):
             section = structural_section or unit.section
-            parent_bodies = _split_long(block, parent_size, min(overlap * 2, parent_size // 4))
+            is_table = unit.document_type in {"xlsx", "docx_table"} or block.lstrip().casefold().startswith("[table]")
+            parent_bodies = _split_table(block, parent_size) if is_table else []
+            if not parent_bodies:
+                parent_bodies = _split_long(block, parent_size, min(overlap * 2, parent_size // 4))
             for parent_index, parent_body in enumerate(parent_bodies):
                 parent_id = _stable_id(unit.source, unit.page, section, parent_index, parent_body)
                 parent = ParentSection(
@@ -163,7 +193,9 @@ def build_chunks(
                     document_type=unit.document_type,
                 )
                 parents.append(parent)
-                bodies = _merge_small(_split_long(parent_body, child_size, overlap), minimum, child_size)
+                bodies = _split_table(parent_body, child_size) if is_table else []
+                if not bodies:
+                    bodies = _merge_small(_split_long(parent_body, child_size, overlap), minimum, child_size)
                 for child_index, body in enumerate(bodies):
                     header = _context_header(unit.source, unit.page, section, unit.document_type)
                     text = f"{header}\n{body}"

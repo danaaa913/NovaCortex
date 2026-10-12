@@ -54,4 +54,10 @@ class OllamaClient:
         response.raise_for_status()
         import json
         content = response.json().get("message", {}).get("content", "")
-        return json.loads(content)
+        try:
+            value = json.loads(content)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise RuntimeError("Ollama returned an invalid structured response") from exc
+        if not isinstance(value, dict):
+            raise RuntimeError("Ollama structured response was not an object")
+        return value

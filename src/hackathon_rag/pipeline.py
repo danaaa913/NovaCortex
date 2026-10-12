@@ -1,9 +1,12 @@
 """End-to-end ingestion, retrieval and local answer pipeline."""
 
+import hashlib
 import json
 import statistics
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
+from uuid import uuid4
 
 from .answering import GroundedAnswerer
 from .chunking import build_chunks
@@ -29,7 +32,11 @@ class HackathonRAG:
     def ingest(self, reset: bool = True) -> dict:
         inventory = document_inventory(self.config.documents_dir)
         extraction = {}
-        units = load_documents(self.config.documents_dir, diagnostics=extraction)
+        units = load_documents(
+            self.config.documents_dir,
+            diagnostics=extraction,
+            quarantine_suspicious=self.config.quarantine_suspicious,
+        )
         parents, chunks = build_chunks(
             units,
             parent_size=self.config.parent_size,
@@ -44,11 +51,22 @@ class HackathonRAG:
             self.config.embedding_model,
             document_prefix=self.config.embedding_document_prefix,
             reset=reset,
+            manifest_extra={
+                "inventory": inventory,
+                "extracted_units": len(units),
+                "extraction": extraction,
+                "chunking": {
+                    "parent_size": self.config.parent_size,
+                    "child_size": self.config.child_size,
+                    "overlap": self.config.child_overlap,
+                    "minimum": self.config.min_chunk_size,
+                },
+                "security": {
+                    "quarantine_enabled": self.config.quarantine_suspicious,
+                    "quarantined_files": extraction.get("quarantined", 0),
+                },
+            },
         )
-        manifest["inventory"] = inventory
-        manifest["extracted_units"] = len(units)
-        manifest["extraction"] = extraction
-        self.store.manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         self._retriever = None
         self._workflow = None
         return manifest
@@ -57,7 +75,11 @@ class HackathonRAG:
         """Inspect extraction and chunks before downloading models or embedding."""
         inventory = document_inventory(self.config.documents_dir)
         extraction = {}
-        units = load_documents(self.config.documents_dir, diagnostics=extraction)
+        units = load_documents(
+            self.config.documents_dir,
+            diagnostics=extraction,
+            quarantine_suspicious=self.config.quarantine_suspicious,
+        )
         parents, chunks = build_chunks(
             units,
             parent_size=self.config.parent_size,
@@ -146,7 +168,36 @@ class HackathonRAG:
                 load_parents=self.store.load_parents,
                 answer=answerer.answer,
             )
-        return self._workflow.invoke(question)
+        result = self._workflow.invoke(question)
+        result.request_id = uuid4().hex
+        if self.config.trace_enabled:
+            self._write_trace(question, result)
+        return result
+
+    def _write_trace(self, question: str, result: Answer) -> None:
+        """Write non-sensitive operational metadata for reproducible debugging."""
+        try:
+            manifest = json.loads(self.store.manifest_path.read_text(encoding="utf-8"))
+            event = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "request_id": result.request_id,
+                "question_sha256": hashlib.sha256(question.encode("utf-8")).hexdigest(),
+                "index_id": manifest.get("index_id"),
+                "chat_model": self.config.chat_model,
+                "embedding_model": self.config.embedding_model,
+                "supported": result.supported,
+                "latency_ms": result.latency_ms,
+                "timings_ms": result.timings_ms,
+                "retrieved_chunk_ids": [item.get("chunk_id") for item in result.retrieved],
+                "citations": [item.get("evidence_id") for item in result.citations],
+            }
+            trace_path = self.config.index_dir.parent / "rag_traces.jsonl"
+            trace_path.parent.mkdir(parents=True, exist_ok=True)
+            with trace_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        except (OSError, ValueError, TypeError):
+            # Tracing must never make an otherwise valid answer fail.
+            return
 
     def doctor(self) -> dict:
         import importlib.util
@@ -168,6 +219,9 @@ class HackathonRAG:
             "embedding_model": self.config.embedding_model,
             "documents_dir": str(self.config.documents_dir),
             "index_dir": str(self.config.index_dir),
+            "quarantine_suspicious": self.config.quarantine_suspicious,
+            "trace_enabled": self.config.trace_enabled,
+            "trace_path": str(self.config.index_dir.parent / "rag_traces.jsonl"),
             "documents_directory_exists": self.config.documents_dir.exists(),
             "index_ready": all(
                 path.exists()

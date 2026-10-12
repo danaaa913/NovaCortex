@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List, Optional
 
 from .cleaning import clean_text, remove_repeated_page_lines
 from .models import SourceUnit
+from .security import scan_units, sha256_file
 
 
 SUPPORTED_EXTENSIONS = {".pdf", ".txt", ".md", ".html", ".htm", ".json", ".csv", ".docx", ".pptx", ".xlsx"}
@@ -200,7 +201,11 @@ def load_file(path: Path, root: Path, stats: Optional[Dict] = None) -> List[Sour
     return []
 
 
-def load_documents(directory: Path, diagnostics: Optional[Dict] = None) -> List[SourceUnit]:
+def load_documents(
+    directory: Path,
+    diagnostics: Optional[Dict] = None,
+    quarantine_suspicious: bool = True,
+) -> List[SourceUnit]:
     if not directory.exists():
         raise FileNotFoundError(f"Documents directory does not exist: {directory}")
     paths = sorted(path for path in directory.rglob("*") if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS)
@@ -211,10 +216,14 @@ def load_documents(directory: Path, diagnostics: Optional[Dict] = None) -> List[
     files = []
     for path in paths:
         source = _relative(path, directory)
+        file_hash = None
+        file_size = None
         try:
+            file_hash = sha256_file(path)
+            file_size = path.stat().st_size
             file_stats = {}
             loaded = load_file(path, directory, file_stats)
-            units.extend(loaded)
+            security = scan_units(loaded)
             status = "ok" if loaded else "empty"
             message = ""
             if not loaded and path.suffix.lower() == ".pdf":
@@ -223,16 +232,33 @@ def load_documents(directory: Path, diagnostics: Optional[Dict] = None) -> List[
             elif file_stats.get("total_pages", 0) > file_stats.get("pages_with_text", 0):
                 status = "partial"
                 message = "Some pages or slides yielded no searchable text; inspect them for scans or visual-only content."
+            indexed = bool(loaded)
+            if security["status"] == "quarantined":
+                status = "quarantined"
+                message = (
+                    "High-risk instruction-like content was detected before normalization. "
+                    "Review the security findings before allowing this file into the index."
+                )
+                indexed = not quarantine_suspicious
+            elif security["status"] == "suspicious" and status == "ok":
+                status = "suspicious"
+                message = "Invisible or bidirectional Unicode was detected and normalized; review the findings."
+            if indexed:
+                units.extend(loaded)
             files.append({
                 "source": source,
                 "type": path.suffix.lower(),
                 "status": status,
+                "indexed": indexed,
+                "sha256": file_hash,
+                "bytes": file_size,
                 "extracted_units": len(loaded),
                 "pages_with_text": file_stats.get(
                     "pages_with_text", len({unit.page for unit in loaded if unit.page is not None})
                 ),
                 "total_pages": file_stats.get("total_pages"),
                 "message": message,
+                "security": security,
             })
         except Exception as exc:
             failure = f"{source}: {exc}"
@@ -241,13 +267,23 @@ def load_documents(directory: Path, diagnostics: Optional[Dict] = None) -> List[
                 "source": source,
                 "type": path.suffix.lower(),
                 "status": "error",
+                "indexed": False,
+                "sha256": file_hash,
+                "bytes": file_size,
                 "extracted_units": 0,
                 "pages_with_text": 0,
                 "total_pages": None,
                 "message": str(exc),
+                "security": {"status": "unknown", "findings": []},
             })
     if not units:
-        raise RuntimeError("No text could be extracted. " + "; ".join(failures))
+        quarantined = [item["source"] for item in files if item["status"] == "quarantined"]
+        reason = "No safe searchable text remained after document screening."
+        if quarantined:
+            reason += " Quarantined: " + ", ".join(quarantined) + "."
+        if failures:
+            reason += " Extraction failures: " + "; ".join(failures)
+        raise RuntimeError(reason)
     cleaned = []
     for unit in units:
         text = clean_text(unit.text)
@@ -258,6 +294,8 @@ def load_documents(directory: Path, diagnostics: Optional[Dict] = None) -> List[
         diagnostics.update({
             "files": files,
             "ok": sum(item["status"] == "ok" for item in files),
+            "indexed_files": sum(bool(item["indexed"]) for item in files),
+            "quarantined": sum(item["status"] == "quarantined" for item in files),
             "needs_attention": sum(item["status"] != "ok" for item in files),
             "failures": failures,
         })

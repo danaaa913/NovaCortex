@@ -113,22 +113,20 @@ class HybridRetriever:
             source_counts[chunk.source] += 1
             seen_parents.add(chunk.parent_id)
 
-        for chunk_id in ranked:
-            chunk = self.by_id[chunk_id]
-            if source_counts[chunk.source] >= self.max_per_source:
-                continue
-            if chunk.parent_id in seen_parents:
-                continue
-            add_result(chunk_id)
-            if len(selected) >= self.final_k:
+        # Prefer source diversity with a soft penalty. A hard per-source cap can
+        # discard multi-page evidence when the answer lives in one long document.
+        remaining = list(ranked)
+        while remaining and len(selected) < self.final_k:
+            eligible = [chunk_id for chunk_id in remaining if self.by_id[chunk_id].parent_id not in seen_parents]
+            if not eligible:
                 break
-        # Diversity is a preference, not a reason to return too little context.
-        if len(selected) < self.final_k:
-            for chunk_id in ranked:
-                chunk = self.by_id[chunk_id]
-                if chunk.parent_id in seen_parents:
-                    continue
-                add_result(chunk_id)
-                if len(selected) >= self.final_k:
-                    break
+
+            def adjusted_score(chunk_id: str) -> float:
+                source = self.by_id[chunk_id].source
+                excess = max(0, source_counts[source] - self.max_per_source + 1)
+                return fused[chunk_id] * (0.72 ** excess)
+
+            chosen = max(eligible, key=lambda chunk_id: (adjusted_score(chunk_id), fused[chunk_id]))
+            add_result(chosen)
+            remaining.remove(chosen)
         return selected

@@ -26,8 +26,12 @@ def _show_answer(result) -> None:
             if citation.get("section"):
                 location += f" — {citation['section']}"
             print(f"- {location}")
+            if citation.get("quote"):
+                print(f"  \"{citation['quote']}\"")
     if not result.supported:
         print("\n[The answer was not fully supported by the provided documents.]")
+    if result.request_id:
+        print(f"\nRequest ID: {result.request_id}")
 
 
 def build_parser() -> argparse.ArgumentParser:

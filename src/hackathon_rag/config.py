@@ -17,6 +17,13 @@ def _int_env(name: str, default: int) -> int:
     return int(value) if value else default
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().casefold() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class HackathonConfig:
     documents_dir: Path = Path(os.getenv("HACKATHON_DOCUMENTS_DIR", "hackathon_workspace/documents"))
@@ -36,6 +43,8 @@ class HackathonConfig:
     max_per_source: int = _int_env("HACKATHON_MAX_PER_SOURCE", 2)
     max_context_chars: int = _int_env("HACKATHON_MAX_CONTEXT_CHARS", 14000)
     request_timeout: int = _int_env("OLLAMA_REQUEST_TIMEOUT", 180)
+    quarantine_suspicious: bool = _bool_env("HACKATHON_QUARANTINE_SUSPICIOUS", True)
+    trace_enabled: bool = _bool_env("HACKATHON_TRACE_ENABLED", True)
 
     def validate(self) -> None:
         if self.child_size < 300:

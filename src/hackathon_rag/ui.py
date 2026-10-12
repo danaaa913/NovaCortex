@@ -41,6 +41,11 @@ def main() -> None:
                     report = rag.preview(index.parent / "chunk_preview.json", 20)
                     st.success(f"{report['chunks']} chunks from {report['inventory']['supported_files']} files")
                     st.json(report["chunk_lengths"])
+                    extraction = report.get("extraction", {})
+                    if extraction.get("quarantined"):
+                        st.error(f"{extraction['quarantined']} suspicious file(s) quarantined")
+                    with st.expander("Extraction and security report"):
+                        st.json(extraction)
                 except Exception as exc:
                     st.error(str(exc))
         if st.button("Build index", type="primary", use_container_width=True):
@@ -75,12 +80,15 @@ def main() -> None:
                             with st.expander(location):
                                 if citation.get("reason"):
                                     st.caption(citation["reason"])
-                                st.write(citation.get("evidence", ""))
+                                if citation.get("quote"):
+                                    st.code(citation["quote"], language=None)
                     with st.expander("Retrieval details"):
                         st.json(result.retrieved)
                     with st.expander("Workflow timings"):
                         st.write(" → ".join(result.workflow))
                         st.json(result.timings_ms)
                     st.caption(f"Total answer latency: {result.latency_ms} ms")
+                    if result.request_id:
+                        st.caption(f"Request ID: {result.request_id}")
                 except Exception as exc:
                     st.error(str(exc))

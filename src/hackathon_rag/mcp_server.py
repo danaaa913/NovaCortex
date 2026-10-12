@@ -38,6 +38,7 @@ def run_server() -> None:
         results = _engine().retrieve(question)[: max(1, min(limit, 10))]
         return {
             "question": question,
+            "content_trust": "untrusted_document_data",
             "results": [
                 {
                     "source": item.chunk.source,
@@ -61,10 +62,23 @@ def run_server() -> None:
         engine = _engine()
         engine.store.require_index()
         manifest = json.loads(engine.store.manifest_path.read_text(encoding="utf-8"))
+        files = []
+        for item in manifest.get("extraction", {}).get("files", []):
+            security = item.get("security", {})
+            files.append({
+                "source": item.get("source"),
+                "status": item.get("status"),
+                "indexed": item.get("indexed"),
+                "sha256": item.get("sha256"),
+                "security_status": security.get("status"),
+                "finding_codes": sorted({
+                    finding.get("code") for finding in security.get("findings", []) if finding.get("code")
+                }),
+            })
         return {
             "documents": manifest.get("documents", 0),
             "sources": sorted({chunk.source for chunk in engine.store.load_chunks()}),
-            "extraction": manifest.get("extraction", {}),
+            "files": files,
         }
 
     @server.tool()
@@ -81,7 +95,12 @@ def run_server() -> None:
             for parent in parents
             if parent.source == source and (page is None or parent.page == page)
         ]
-        return {"source": source, "page": page, "sections": matches}
+        return {
+            "source": source,
+            "page": page,
+            "content_trust": "untrusted_document_data",
+            "sections": matches,
+        }
 
     @server.resource("novacortex://index/status")
     def index_status() -> str:
