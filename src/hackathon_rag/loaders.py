@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List, Optional
 
 from .cleaning import clean_text, remove_repeated_page_lines
 from .models import SourceUnit
+from .privacy import filename_privacy_findings, scan_units_privacy
 from .security import scan_units, sha256_file
 
 
@@ -205,6 +206,7 @@ def load_documents(
     directory: Path,
     diagnostics: Optional[Dict] = None,
     quarantine_suspicious: bool = True,
+    quarantine_sensitive: bool = True,
 ) -> List[SourceUnit]:
     if not directory.exists():
         raise FileNotFoundError(f"Documents directory does not exist: {directory}")
@@ -224,6 +226,19 @@ def load_documents(
             file_stats = {}
             loaded = load_file(path, directory, file_stats)
             security = scan_units(loaded)
+            privacy = scan_units_privacy(loaded)
+            filename_findings = filename_privacy_findings(source)
+            if filename_findings:
+                privacy["findings"] = filename_findings + list(privacy["findings"])
+                privacy["high_findings"] = int(privacy["high_findings"]) + sum(
+                    item["severity"] == "high" for item in filename_findings
+                )
+                privacy["medium_findings"] = int(privacy["medium_findings"]) + sum(
+                    item["severity"] == "medium" for item in filename_findings
+                )
+                privacy["classification"] = (
+                    "restricted" if privacy["high_findings"] else "personal_data_review"
+                )
             status = "ok" if loaded else "empty"
             message = ""
             if not loaded and path.suffix.lower() == ".pdf":
@@ -240,9 +255,22 @@ def load_documents(
                     "Review the security findings before allowing this file into the index."
                 )
                 indexed = not quarantine_suspicious
+            elif privacy["classification"] == "restricted":
+                status = "restricted"
+                message = (
+                    "Likely high-risk personal identifiers or credentials were detected. "
+                    "The report contains categories and counts only; review the source file before indexing it."
+                )
+                indexed = not quarantine_sensitive
             elif security["status"] == "suspicious" and status == "ok":
                 status = "suspicious"
                 message = "Invisible or bidirectional Unicode was detected and normalized; review the findings."
+            elif privacy["classification"] == "personal_data_review" and status == "ok":
+                status = "privacy_review"
+                message = (
+                    "Possible contact information was detected. It remains indexed because it may be an official "
+                    "public contact, but should be reviewed."
+                )
             if indexed:
                 units.extend(loaded)
             files.append({
@@ -259,6 +287,7 @@ def load_documents(
                 "total_pages": file_stats.get("total_pages"),
                 "message": message,
                 "security": security,
+                "privacy": privacy,
             })
         except Exception as exc:
             failure = f"{source}: {exc}"
@@ -275,9 +304,10 @@ def load_documents(
                 "total_pages": None,
                 "message": str(exc),
                 "security": {"status": "unknown", "findings": []},
+                "privacy": {"classification": "unknown", "findings": []},
             })
     if not units:
-        quarantined = [item["source"] for item in files if item["status"] == "quarantined"]
+        quarantined = [item["source"] for item in files if item["status"] in {"quarantined", "restricted"}]
         reason = "No safe searchable text remained after document screening."
         if quarantined:
             reason += " Quarantined: " + ", ".join(quarantined) + "."
@@ -296,6 +326,7 @@ def load_documents(
             "ok": sum(item["status"] == "ok" for item in files),
             "indexed_files": sum(bool(item["indexed"]) for item in files),
             "quarantined": sum(item["status"] == "quarantined" for item in files),
+            "restricted": sum(item["status"] == "restricted" for item in files),
             "needs_attention": sum(item["status"] != "ok" for item in files),
             "failures": failures,
         })

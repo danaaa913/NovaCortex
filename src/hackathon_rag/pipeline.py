@@ -1,6 +1,5 @@
 """End-to-end ingestion, retrieval and local answer pipeline."""
 
-import hashlib
 import json
 import statistics
 from datetime import datetime, timezone
@@ -15,6 +14,7 @@ from .config import HackathonConfig
 from .loaders import document_inventory, load_documents
 from .models import Answer, RetrievedChunk
 from .ollama_client import OllamaClient
+from .privacy import question_privacy_findings
 from .retrieval import HybridRetriever
 from .store import DocumentStore
 from .workflow import DeterministicRAGWorkflow
@@ -36,6 +36,7 @@ class HackathonRAG:
             self.config.documents_dir,
             diagnostics=extraction,
             quarantine_suspicious=self.config.quarantine_suspicious,
+            quarantine_sensitive=self.config.quarantine_sensitive,
         )
         parents, chunks = build_chunks(
             units,
@@ -64,6 +65,8 @@ class HackathonRAG:
                 "security": {
                     "quarantine_enabled": self.config.quarantine_suspicious,
                     "quarantined_files": extraction.get("quarantined", 0),
+                    "restricted_files": extraction.get("restricted", 0),
+                    "sensitive_quarantine_enabled": self.config.quarantine_sensitive,
                 },
             },
         )
@@ -79,6 +82,7 @@ class HackathonRAG:
             self.config.documents_dir,
             diagnostics=extraction,
             quarantine_suspicious=self.config.quarantine_suspicious,
+            quarantine_sensitive=self.config.quarantine_sensitive,
         )
         parents, chunks = build_chunks(
             units,
@@ -158,9 +162,30 @@ class HackathonRAG:
         question = clean_text(question)
         if not question:
             raise ValueError("Question cannot be empty")
+        findings = question_privacy_findings(question)
+        if findings:
+            categories = ", ".join(sorted({str(item["code"]) for item in findings}))
+            raise ValueError(
+                "For privacy, remove personal identifiers from the question before searching. "
+                f"Detected categories: {categories}"
+            )
         return self._get_retriever().retrieve(question)
 
     def ask(self, question: str) -> Answer:
+        privacy_findings = question_privacy_findings(question)
+        if privacy_findings:
+            arabic = sum("\u0600" <= char <= "\u06ff" for char in question) >= sum(char.isascii() and char.isalpha() for char in question)
+            result = Answer(
+                answer=(
+                    "لحماية خصوصيتك، احذف الرقم الوطني أو رقم الجواز أو بيانات الاتصال أو البيانات المالية من السؤال، ثم اسأل عن خطوات الخدمة بشكل عام. لم يتم إرسال السؤال إلى النموذج."
+                    if arabic else
+                    "For your privacy, remove identity, passport, contact, or financial details and ask about the service in general. The question was not sent to the model."
+                ),
+                supported=False,
+                workflow=["privacy_guard"],
+                request_id=uuid4().hex,
+            )
+            return result
         if self._workflow is None:
             answerer = GroundedAnswerer(self.ollama, self.config.chat_model, self.config.max_context_chars)
             self._workflow = DeterministicRAGWorkflow(
@@ -181,7 +206,11 @@ class HackathonRAG:
             event = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "request_id": result.request_id,
-                "question_sha256": hashlib.sha256(question.encode("utf-8")).hexdigest(),
+                "question_characters": len(question),
+                "question_language": (
+                    "ar" if sum("\u0600" <= char <= "\u06ff" for char in question)
+                    >= sum(char.isascii() and char.isalpha() for char in question) else "en"
+                ),
                 "index_id": manifest.get("index_id"),
                 "chat_model": self.config.chat_model,
                 "embedding_model": self.config.embedding_model,
@@ -220,6 +249,7 @@ class HackathonRAG:
             "documents_dir": str(self.config.documents_dir),
             "index_dir": str(self.config.index_dir),
             "quarantine_suspicious": self.config.quarantine_suspicious,
+            "quarantine_sensitive": self.config.quarantine_sensitive,
             "trace_enabled": self.config.trace_enabled,
             "trace_path": str(self.config.index_dir.parent / "rag_traces.jsonl"),
             "documents_directory_exists": self.config.documents_dir.exists(),

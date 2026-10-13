@@ -44,6 +44,7 @@ class HackathonConfig:
     max_context_chars: int = _int_env("HACKATHON_MAX_CONTEXT_CHARS", 14000)
     request_timeout: int = _int_env("OLLAMA_REQUEST_TIMEOUT", 180)
     quarantine_suspicious: bool = _bool_env("HACKATHON_QUARANTINE_SUSPICIOUS", True)
+    quarantine_sensitive: bool = _bool_env("HACKATHON_QUARANTINE_SENSITIVE", True)
     trace_enabled: bool = _bool_env("HACKATHON_TRACE_ENABLED", True)
 
     def validate(self) -> None:

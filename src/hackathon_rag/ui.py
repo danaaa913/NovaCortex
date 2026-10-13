@@ -42,8 +42,9 @@ def main() -> None:
                     st.success(f"{report['chunks']} chunks from {report['inventory']['supported_files']} files")
                     st.json(report["chunk_lengths"])
                     extraction = report.get("extraction", {})
-                    if extraction.get("quarantined"):
-                        st.error(f"{extraction['quarantined']} suspicious file(s) quarantined")
+                    excluded = extraction.get("quarantined", 0) + extraction.get("restricted", 0)
+                    if excluded:
+                        st.error(f"{excluded} unsafe or restricted file(s) excluded from the index")
                     with st.expander("Extraction and security report"):
                         st.json(extraction)
                 except Exception as exc:
@@ -65,7 +66,9 @@ def main() -> None:
                 try:
                     result = rag.ask(question)
                     st.write(result.answer)
-                    if result.supported:
+                    if result.workflow == ["privacy_guard"]:
+                        st.info("Privacy guard stopped the request before retrieval or model processing")
+                    elif result.supported:
                         st.success("Supported by the provided documents")
                     else:
                         st.warning("The documents did not provide enough support")
