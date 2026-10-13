@@ -6,6 +6,7 @@ from typing import Optional
 
 from .config import HackathonConfig
 from .pipeline import HackathonRAG
+from .privacy import decide_question_privacy
 
 
 _rag: Optional[HackathonRAG] = None
@@ -35,10 +36,13 @@ def run_server() -> None:
     @server.tool()
     def search_documents(question: str, limit: int = 5) -> dict:
         """Search the indexed local documents without generating an answer."""
+        privacy = decide_question_privacy(question)
         results = _engine().retrieve(question)[: max(1, min(limit, 10))]
         return {
-            "question": question,
             "content_trust": "untrusted_document_data",
+            "privacy_action": privacy.action,
+            "privacy_categories": list(privacy.categories),
+            "redacted_count": privacy.redacted_count,
             "results": [
                 {
                     "source": item.chunk.source,
@@ -65,6 +69,7 @@ def run_server() -> None:
         files = []
         for item in manifest.get("extraction", {}).get("files", []):
             security = item.get("security", {})
+            privacy = item.get("privacy", {})
             files.append({
                 "source": item.get("source"),
                 "status": item.get("status"),
@@ -73,6 +78,10 @@ def run_server() -> None:
                 "security_status": security.get("status"),
                 "finding_codes": sorted({
                     finding.get("code") for finding in security.get("findings", []) if finding.get("code")
+                }),
+                "privacy_classification": privacy.get("classification"),
+                "privacy_finding_codes": sorted({
+                    finding.get("code") for finding in privacy.get("findings", []) if finding.get("code")
                 }),
             })
         return {

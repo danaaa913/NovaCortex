@@ -16,6 +16,8 @@ def _print(value) -> None:
 
 
 def _show_answer(result) -> None:
+    if result.privacy_notice:
+        print(f"[Privacy] {result.privacy_notice}\n")
     print(result.answer)
     if result.citations:
         print("\nSources:")

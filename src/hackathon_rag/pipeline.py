@@ -11,21 +11,27 @@ from .answering import GroundedAnswerer
 from .chunking import build_chunks
 from .cleaning import clean_text
 from .config import HackathonConfig
+from .features import FeatureRegistry
 from .loaders import document_inventory, load_documents
 from .models import Answer, RetrievedChunk
 from .ollama_client import OllamaClient
-from .privacy import question_privacy_findings
+from .privacy import PrivacyDecision, decide_question_privacy
 from .retrieval import HybridRetriever
 from .store import DocumentStore
 from .workflow import DeterministicRAGWorkflow
 
 
 class HackathonRAG:
-    def __init__(self, config: HackathonConfig | None = None):
+    def __init__(
+        self,
+        config: HackathonConfig | None = None,
+        features: FeatureRegistry | None = None,
+    ):
         self.config = config or HackathonConfig()
         self.config.validate()
         self.ollama = OllamaClient(self.config.ollama_base_url, self.config.request_timeout)
         self.store = DocumentStore(self.config.index_dir, self.config.collection_name)
+        self.features = features or FeatureRegistry()
         self._retriever = None
         self._workflow = None
 
@@ -162,30 +168,49 @@ class HackathonRAG:
         question = clean_text(question)
         if not question:
             raise ValueError("Question cannot be empty")
-        findings = question_privacy_findings(question)
-        if findings:
-            categories = ", ".join(sorted({str(item["code"]) for item in findings}))
+        privacy = decide_question_privacy(question)
+        if privacy.action == "block":
             raise ValueError(
-                "For privacy, remove personal identifiers from the question before searching. "
-                f"Detected categories: {categories}"
+                "The question cannot be searched safely. Remove authentication secrets or "
+                "add a general question about the service."
             )
-        return self._get_retriever().retrieve(question)
+        return self._get_retriever().retrieve(clean_text(privacy.sanitized_question))
 
     def ask(self, question: str) -> Answer:
-        privacy_findings = question_privacy_findings(question)
-        if privacy_findings:
-            arabic = sum("\u0600" <= char <= "\u06ff" for char in question) >= sum(char.isascii() and char.isalpha() for char in question)
+        privacy = decide_question_privacy(question)
+        if privacy.action == "block":
+            arabic = privacy.language == "ar"
+            secret = privacy.reason == "authentication_secret"
             result = Answer(
                 answer=(
-                    "لحماية خصوصيتك، احذف الرقم الوطني أو رقم الجواز أو بيانات الاتصال أو البيانات المالية من السؤال، ثم اسأل عن خطوات الخدمة بشكل عام. لم يتم إرسال السؤال إلى النموذج."
-                    if arabic else
-                    "For your privacy, remove identity, passport, contact, or financial details and ask about the service in general. The question was not sent to the model."
+                    (
+                        "لا ترسل كلمة مرور أو PIN أو OTP أو CVV في المحادثة. احذف السر ثم اسأل عن الخدمة من جديد. لم يتم إرسال السؤال إلى النموذج."
+                        if secret else
+                        "بعد حذف البيانات الشخصية لم يبقَ سؤال واضح. أعد صياغة سؤالك عن الخدمة من دون أرقامك أو بيانات الاتصال. لم يتم إرسال السؤال إلى النموذج."
+                    )
+                    if arabic else (
+                        "Do not send passwords, PINs, OTPs, or CVVs in chat. Remove the secret and ask again. The question was not sent to the model."
+                        if secret else
+                        "No clear request remained after removing personal data. Ask about the service without identity or contact values. The question was not sent to the model."
+                    )
                 ),
                 supported=False,
                 workflow=["privacy_guard"],
                 request_id=uuid4().hex,
+                privacy_action="block",
+                privacy_categories=list(privacy.categories),
+                redacted_count=privacy.redacted_count,
             )
             return result
+
+        feature_result = self.features.try_handle(privacy.sanitized_question, privacy.language)
+        if feature_result is not None:
+            result = self._apply_privacy_metadata(feature_result, privacy)
+            result.request_id = result.request_id or uuid4().hex
+            if self.config.trace_enabled:
+                self._write_trace(result)
+            return result
+
         if self._workflow is None:
             answerer = GroundedAnswerer(self.ollama, self.config.chat_model, self.config.max_context_chars)
             self._workflow = DeterministicRAGWorkflow(
@@ -193,24 +218,33 @@ class HackathonRAG:
                 load_parents=self.store.load_parents,
                 answer=answerer.answer,
             )
-        result = self._workflow.invoke(question)
+        result = self._workflow.invoke(privacy.sanitized_question, response_language=privacy.language)
+        result = self._apply_privacy_metadata(result, privacy)
         result.request_id = uuid4().hex
         if self.config.trace_enabled:
-            self._write_trace(question, result)
+            self._write_trace(result)
         return result
 
-    def _write_trace(self, question: str, result: Answer) -> None:
+    @staticmethod
+    def _apply_privacy_metadata(result: Answer, privacy: PrivacyDecision) -> Answer:
+        result.privacy_action = privacy.action
+        result.privacy_categories = list(privacy.categories)
+        result.redacted_count = privacy.redacted_count
+        if privacy.action == "redact":
+            result.privacy_notice = (
+                "حذفنا بيانات شخصية غير لازمة وأجبنا عن سؤالك العام."
+                if privacy.language == "ar" else
+                "We removed unnecessary personal data and answered the general question."
+            )
+        return result
+
+    def _write_trace(self, result: Answer) -> None:
         """Write non-sensitive operational metadata for reproducible debugging."""
         try:
             manifest = json.loads(self.store.manifest_path.read_text(encoding="utf-8"))
             event = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "request_id": result.request_id,
-                "question_characters": len(question),
-                "question_language": (
-                    "ar" if sum("\u0600" <= char <= "\u06ff" for char in question)
-                    >= sum(char.isascii() and char.isalpha() for char in question) else "en"
-                ),
                 "index_id": manifest.get("index_id"),
                 "chat_model": self.config.chat_model,
                 "embedding_model": self.config.embedding_model,
@@ -219,6 +253,9 @@ class HackathonRAG:
                 "timings_ms": result.timings_ms,
                 "retrieved_chunk_ids": [item.get("chunk_id") for item in result.retrieved],
                 "citations": [item.get("evidence_id") for item in result.citations],
+                "privacy_action": result.privacy_action,
+                "privacy_categories": result.privacy_categories,
+                "redacted_count": result.redacted_count,
             }
             trace_path = self.config.index_dir.parent / "rag_traces.jsonl"
             trace_path.parent.mkdir(parents=True, exist_ok=True)

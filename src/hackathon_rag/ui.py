@@ -65,6 +65,8 @@ def main() -> None:
             with st.spinner("Searching the documents..."):
                 try:
                     result = rag.ask(question)
+                    if result.privacy_notice:
+                        st.info(result.privacy_notice)
                     st.write(result.answer)
                     if result.workflow == ["privacy_guard"]:
                         st.info("Privacy guard stopped the request before retrieval or model processing")

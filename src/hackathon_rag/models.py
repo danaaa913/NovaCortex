@@ -68,6 +68,10 @@ class Answer:
     timings_ms: Dict[str, int] = field(default_factory=dict)
     workflow: List[str] = field(default_factory=list)
     request_id: str = ""
+    privacy_action: str = "allow"
+    privacy_categories: List[str] = field(default_factory=list)
+    redacted_count: int = 0
+    privacy_notice: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

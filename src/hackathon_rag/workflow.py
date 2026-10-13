@@ -9,6 +9,7 @@ from .models import Answer, ParentSection, RetrievedChunk
 
 class RAGState(TypedDict, total=False):
     question: str
+    response_language: str
     retrieved: List[RetrievedChunk]
     parents: Dict[str, ParentSection]
     answer: Answer
@@ -23,7 +24,7 @@ class DeterministicRAGWorkflow:
         self,
         retrieve: Callable[[str], List[RetrievedChunk]],
         load_parents: Callable[[], Dict[str, ParentSection]],
-        answer: Callable[[str, List[RetrievedChunk], Dict[str, ParentSection]], Answer],
+        answer: Callable[[str, List[RetrievedChunk], Dict[str, ParentSection], str], Answer],
     ):
         try:
             from langgraph.graph import END, START, StateGraph
@@ -82,16 +83,26 @@ class DeterministicRAGWorkflow:
 
     def _generate_grounded_answer(self, state: RAGState) -> dict:
         started = time.perf_counter()
-        answer = self._answer_callback(state["question"], state.get("retrieved", []), state.get("parents", {}))
+        answer = self._answer_callback(
+            state["question"],
+            state.get("retrieved", []),
+            state.get("parents", {}),
+            state.get("response_language", "ar"),
+        )
         update = self._record(state, "generate_grounded_answer", int((time.perf_counter() - started) * 1000))
         answer.timings_ms = update["timings_ms"]
         answer.workflow = update["workflow"]
         update["answer"] = answer
         return update
 
-    def invoke(self, question: str) -> Answer:
+    def invoke(self, question: str, response_language: str = "ar") -> Answer:
         started = time.perf_counter()
-        state = self._graph.invoke({"question": question, "timings_ms": {}, "workflow": []})
+        state = self._graph.invoke({
+            "question": question,
+            "response_language": response_language,
+            "timings_ms": {},
+            "workflow": [],
+        })
         result = state["answer"]
         result.latency_ms = int((time.perf_counter() - started) * 1000)
         return result
