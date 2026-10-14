@@ -13,11 +13,33 @@ from .store import DocumentStore
 ARABIC_DIACRITICS = re.compile(r"[\u0610-\u061a\u064b-\u065f\u0670\u06d6-\u06ed]")
 TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u0600-\u06ff]+")
 
+QUERY_SECTION_MARKERS = {
+    "eligibility": ("مؤهل", "استحقاق", "الفئة", "eligible", "eligibility"),
+    "requirements": ("الشروط", "شرط", "requirements", "conditions"),
+    "documents": ("وثائق", "مستندات", "اوراق", "أوراق", "documents", "papers"),
+    "fees": ("رسوم", "تكلفة", "كم السعر", "fees", "cost", "price"),
+    "duration": ("مدة", "كم يوم", "متى", "duration", "how long", "processing time"),
+    "steps": ("خطوات", "كيف اقدم", "كيف أقدم", "اجراءات", "إجراءات", "steps", "how to apply"),
+    "location": ("مكان", "أماكن", "وين", "أين", "موقع", "فرع", "location", "where"),
+    "exceptions": ("استثناء", "exceptions"),
+    "contact": ("اتصال", "هاتف", "ايميل", "بريد", "contact", "phone", "email"),
+    "legal_basis": ("المادة", "قانون", "نظام", "legal basis", "article", "law"),
+}
+
+
+def query_section_kinds(question: str) -> set[str]:
+    value = question.casefold()
+    return {
+        kind for kind, markers in QUERY_SECTION_MARKERS.items()
+        if any(marker.casefold() in value for marker in markers)
+    }
+
 
 def tokenize(text: str) -> List[str]:
     text = ARABIC_DIACRITICS.sub("", text.casefold())
     text = text.translate(str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي"}))
-    return [token for token in TOKEN_RE.findall(text) if len(token) > 1 or token.isdigit()]
+    tokens = [token.strip("،؛؟ـ") for token in TOKEN_RE.findall(text)]
+    return [token for token in tokens if token and (len(token) > 1 or token.isdigit())]
 
 
 class LightweightBM25:
@@ -76,14 +98,29 @@ class HybridRetriever:
         self.by_id = {chunk.id: chunk for chunk in self.chunks}
         self.bm25 = LightweightBM25([chunk.text for chunk in self.chunks])
 
-    def retrieve(self, question: str) -> List[RetrievedChunk]:
+    def retrieve(self, question: str, source_scope: List[str] | None = None) -> List[RetrievedChunk]:
+        allowed_sources = set(source_scope or [])
+        scoped_chunks = [chunk for chunk in self.chunks if not allowed_sources or chunk.source in allowed_sources]
+        if not scoped_chunks:
+            return []
         query_vector = self.ollama.embed(self.embedding_model, [self.query_prefix + question], batch_size=1)[0]
-        vector_ids = self.store.vector_ids(query_vector, min(self.candidates, len(self.chunks)))
+        try:
+            vector_ids = self.store.vector_ids(
+                query_vector,
+                min(self.candidates, len(scoped_chunks)),
+                sorted(allowed_sources) if allowed_sources else None,
+            )
+        except TypeError:  # compatibility for small test stores and external adapters
+            vector_ids = self.store.vector_ids(query_vector, min(self.candidates, len(self.chunks)))
+            vector_ids = [chunk_id for chunk_id in vector_ids if not allowed_sources or self.by_id[chunk_id].source in allowed_sources]
         vector_rank = {chunk_id: rank for rank, chunk_id in enumerate(vector_ids, 1)}
 
         keyword_scores = self.bm25.scores(question)
         keyword_indices = sorted(range(len(keyword_scores)), key=keyword_scores.__getitem__, reverse=True)
-        keyword_indices = [index for index in keyword_indices if keyword_scores[index] > 0][:self.candidates]
+        keyword_indices = [
+            index for index in keyword_indices
+            if keyword_scores[index] > 0 and (not allowed_sources or self.chunks[index].source in allowed_sources)
+        ][:self.candidates]
         keyword_rank = {self.chunks[index].id: rank for rank, index in enumerate(keyword_indices, 1)}
 
         fused: Dict[str, float] = defaultdict(float)
@@ -93,9 +130,12 @@ class HybridRetriever:
             fused[chunk_id] += 1.0 / (60 + rank)
 
         query_numbers = set(re.findall(r"\d+", question))
+        desired_sections = query_section_kinds(question)
         for chunk_id in list(fused):
             if query_numbers and query_numbers & set(re.findall(r"\d+", self.by_id[chunk_id].text)):
                 fused[chunk_id] *= 1.15
+            if desired_sections and self.by_id[chunk_id].section_kind in desired_sections:
+                fused[chunk_id] *= 1.18
 
         ranked = sorted(fused, key=fused.get, reverse=True)
         selected = []

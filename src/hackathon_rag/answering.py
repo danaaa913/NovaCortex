@@ -6,6 +6,7 @@ from typing import Dict, List
 
 from .models import Answer, ParentSection, RetrievedChunk
 from .ollama_client import OllamaClient
+from .evidence import evidence_warnings, extractive_fallback
 
 
 ANSWER_SCHEMA = {
@@ -153,6 +154,13 @@ class GroundedAnswerer:
                 ANSWER_SCHEMA,
             ))
         except (RuntimeError, ValueError, TypeError):
+            fallback = extractive_fallback(
+                question, retrieved, parents, response_language, retrieved_summary
+            )
+            if fallback is not None:
+                fallback.evidence_warnings = evidence_warnings(retrieved, parents, response_language)
+                fallback.latency_ms = int((time.perf_counter() - started) * 1000)
+                return fallback
             arabic = response_language == "ar"
             return Answer(
                 answer=(
@@ -188,6 +196,13 @@ class GroundedAnswerer:
         supported = bool(raw.get("supported")) and bool(citations)
         answer_text = str(raw.get("answer", "")).strip()
         if raw.get("supported") and not citations:
+            fallback = extractive_fallback(
+                question, retrieved, parents, response_language, retrieved_summary
+            )
+            if fallback is not None:
+                fallback.evidence_warnings = evidence_warnings(retrieved, parents, response_language)
+                fallback.latency_ms = int((time.perf_counter() - started) * 1000)
+                return fallback
             arabic = response_language == "ar"
             answer_text = (
                 "لم أتمكن من التحقق من اقتباس يدعم الإجابة في الوثائق."
@@ -207,4 +222,6 @@ class GroundedAnswerer:
             citations=citations,
             retrieved=retrieved_summary,
             latency_ms=int((time.perf_counter() - started) * 1000),
+            answer_mode="generated",
+            evidence_warnings=evidence_warnings(retrieved, parents, response_language),
         )

@@ -19,6 +19,10 @@ def _show_answer(result) -> None:
     if result.privacy_notice:
         print(f"[Privacy] {result.privacy_notice}\n")
     print(result.answer)
+    if result.answer_mode == "extractive":
+        print("\n[Extractive fallback: exact source passages were used.]")
+    for warning in result.evidence_warnings:
+        print(f"\n[Evidence warning] {warning}")
     if result.citations:
         print("\nSources:")
         for citation in result.citations:
@@ -51,8 +55,10 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("--no-reset", action="store_true", help="Do not delete the previous index first")
     ask = subparsers.add_parser("ask", help="Ask one question")
     ask.add_argument("question")
+    ask.add_argument("--source", action="append", default=[], help="Limit retrieval to this indexed source (repeatable)")
     inspect = subparsers.add_parser("inspect", help="Show retrieved chunks without asking the LLM")
     inspect.add_argument("question")
+    inspect.add_argument("--source", action="append", default=[], help="Limit retrieval to this indexed source (repeatable)")
     chat = subparsers.add_parser("chat", help="Start a simple interactive session")
     evaluation = subparsers.add_parser("evaluate", help="Run a JSON evaluation set")
     evaluation.add_argument("cases", type=Path)
@@ -85,7 +91,7 @@ def main(argv=None) -> int:
         elif args.command == "ingest":
             _print(rag.ingest(reset=not args.no_reset))
         elif args.command == "ask":
-            _show_answer(rag.ask(args.question))
+            _show_answer(rag.ask(args.question, source_scope=args.source))
         elif args.command == "inspect":
             _print([
                 {
@@ -97,7 +103,7 @@ def main(argv=None) -> int:
                     "keyword_rank": item.keyword_rank,
                     "preview": item.chunk.body[:500],
                 }
-                for item in rag.retrieve(args.question)
+                for item in rag.retrieve(args.question, source_scope=args.source)
             ])
         elif args.command == "chat":
             print("Local document assistant. Type /exit to stop.")

@@ -47,7 +47,7 @@ class DocumentStore:
         vectors = ollama.embed(embedding_model, [document_prefix + chunk.text for chunk in chunks])
         manifest = dict(manifest_extra or {})
         manifest.update({
-            "schema_version": 2,
+            "schema_version": 3,
             "index_id": uuid4().hex,
             "built_at": datetime.now(timezone.utc).isoformat(),
             "embedding_model": embedding_model,
@@ -150,7 +150,19 @@ class DocumentStore:
         values = [ParentSection(**item) for item in json.loads(self.parents_path.read_text(encoding="utf-8"))]
         return {parent.id: parent for parent in values}
 
-    def vector_ids(self, query_vector: List[float], n_results: int) -> List[str]:
+    def vector_ids(
+        self,
+        query_vector: List[float],
+        n_results: int,
+        source_scope: List[str] | None = None,
+    ) -> List[str]:
         collection = self._chroma()
-        result = collection.query(query_embeddings=[query_vector], n_results=n_results, include=["distances"])
+        query = {
+            "query_embeddings": [query_vector],
+            "n_results": n_results,
+            "include": ["distances"],
+        }
+        if source_scope:
+            query["where"] = {"source": {"$in": sorted(set(source_scope))}}
+        result = collection.query(**query)
         return (result.get("ids") or [[]])[0]

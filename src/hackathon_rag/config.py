@@ -29,7 +29,7 @@ class HackathonConfig:
     documents_dir: Path = Path(os.getenv("HACKATHON_DOCUMENTS_DIR", "hackathon_workspace/documents"))
     index_dir: Path = Path(os.getenv("HACKATHON_INDEX_DIR", "hackathon_workspace/index"))
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-    chat_model: str = os.getenv("OLLAMA_CHAT_MODEL", "qwen3:4b")
+    chat_model: str = os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:7b")
     embedding_model: str = os.getenv("OLLAMA_EMBED_MODEL", "embeddinggemma")
     embedding_query_prefix: str = os.getenv("OLLAMA_EMBED_QUERY_PREFIX", "")
     embedding_document_prefix: str = os.getenv("OLLAMA_EMBED_DOCUMENT_PREFIX", "")

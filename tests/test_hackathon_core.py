@@ -15,6 +15,7 @@ from hackathon_rag.evaluation import evaluate  # noqa: E402
 from hackathon_rag.features import FeaturePolicy, FeatureRegistry  # noqa: E402
 from hackathon_rag.loaders import load_documents  # noqa: E402
 from hackathon_rag.answering import GroundedAnswerer  # noqa: E402
+from hackathon_rag.api import WEB_DIR, create_app, validate_bind_security  # noqa: E402
 from hackathon_rag.models import Answer, Chunk, ParentSection, RetrievedChunk, SourceUnit  # noqa: E402
 from hackathon_rag.retrieval import HybridRetriever, LightweightBM25, tokenize  # noqa: E402
 from hackathon_rag.pipeline import HackathonRAG  # noqa: E402
@@ -32,6 +33,31 @@ def test_cleaning_removes_web_noise_and_preserves_lines():
     value = clean_text("عنوان\nيجب عليك تفعيل JavaScript لرؤيته.\nسطر مهم\n\nفقرة ثانية")
     assert "JavaScript" not in value
     assert "عنوان\nسطر مهم\n\nفقرة ثانية" == value
+
+
+def test_api_refuses_unauthenticated_non_local_bind():
+    validate_bind_security("127.0.0.1", "")
+    validate_bind_security("localhost", "")
+    validate_bind_security("0.0.0.0", "private-token")
+    try:
+        validate_bind_security("0.0.0.0", "")
+    except RuntimeError as exc:
+        assert "HACKATHON_API_TOKEN" in str(exc)
+    else:
+        raise AssertionError("public bind without authentication should fail")
+
+
+def test_web_interface_assets_and_optional_fastapi_routes_exist():
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    assert all(marker in html for marker in ('id="askForm"', 'id="question"', 'id="citations"'))
+    assert (WEB_DIR / "styles.css").stat().st_size > 1000
+    assert (WEB_DIR / "app.js").stat().st_size > 1000
+    try:
+        import fastapi  # noqa: F401
+    except ImportError:
+        return
+    routes = {route.path for route in create_app().routes}
+    assert {"/", "/api/health", "/api/sources", "/api/ask", "/api/docs"} <= routes
 
 
 def test_repeated_pdf_headers_are_removed():
@@ -132,7 +158,7 @@ def test_answerer_drops_hallucinated_citation_ids():
     assert result.citations[0]["quote"] == "النص يذكر الشرط."
 
 
-def test_answerer_fails_closed_when_quote_is_not_in_evidence():
+def test_answerer_uses_exact_extractive_fallback_when_model_quote_is_invalid():
     class BadQuoteOllama(_FakeOllama):
         def chat_json(self, model, messages, schema):
             return {
@@ -146,9 +172,9 @@ def test_answerer_fails_closed_when_quote_is_not_in_evidence():
     result = GroundedAnswerer(BadQuoteOllama(), "fake").answer(
         "ما النص؟", [RetrievedChunk(chunk, score=0.1)], parents
     )
-    assert not result.supported
-    assert not result.citations
-    assert "التحقق" in result.answer
+    assert result.supported
+    assert result.answer_mode == "extractive"
+    assert result.citations[0]["quote"] == "النص الحقيقي فقط."
 
 
 def test_answerer_abstains_in_question_language_without_evidence():
@@ -422,6 +448,128 @@ def test_large_markdown_table_repeats_header_in_each_chunk():
     assert len(chunks) > 1
     assert all("| name | value |" in chunk.body for chunk in chunks)
     assert all("| --- | --- |" in chunk.body for chunk in chunks)
+
+
+def test_government_service_headings_create_typed_sections():
+    text = """دليل الخدمة
+
+الوثائق المطلوبة:
+بطاقة شخصية سارية المفعول.
+
+الرسوم:
+خمسة دنانير.
+
+مدة الإنجاز:
+ثلاثة أيام عمل.
+"""
+    parents, chunks = build_chunks(
+        [SourceUnit(text, "service.md", document_type="md")],
+        parent_size=1000,
+        child_size=400,
+        overlap=40,
+        minimum=20,
+    )
+    assert {parent.section_kind for parent in parents} >= {"documents", "fees", "duration"}
+    assert any("Service section: documents" in chunk.text for chunk in chunks)
+
+
+def test_numbered_service_steps_stay_in_one_meaningful_section():
+    text = """دليل الخدمة
+
+خطوات الخدمة:
+1. يقدم المستفيد الطلب.
+2. يدقق الموظف الوثائق.
+3. تسلم النتيجة للمستفيد.
+
+الرسوم:
+لا توجد رسوم.
+"""
+    parents, chunks = build_chunks(
+        [SourceUnit(text, "service.md", document_type="md")],
+        parent_size=1000,
+        child_size=400,
+        overlap=40,
+        minimum=20,
+    )
+    steps = [parent for parent in parents if parent.section_kind == "steps"]
+    assert len(steps) == 1
+    assert all(f"{number}." in steps[0].text for number in (1, 2, 3))
+    assert len([chunk for chunk in chunks if chunk.section_kind == "steps"]) == 1
+
+
+def test_small_government_sample_is_safe_and_covers_service_sections():
+    sample_root = ROOT / "examples" / "government_services_ar" / "documents"
+    diagnostics = {}
+    units = load_documents(sample_root, diagnostics)
+    parents, chunks = build_chunks(units)
+
+    assert diagnostics["indexed_files"] == 3
+    assert diagnostics["quarantined"] == 0
+    assert diagnostics["restricted"] == 0
+    assert {unit.source for unit in units} == {
+        "mfa-document-attestation.md",
+        "psd-passport-audit.md",
+        "psd-residence-renewal.md",
+    }
+    assert {parent.section_kind for parent in parents} >= {
+        "eligibility",
+        "requirements",
+        "documents",
+        "steps",
+        "fees",
+        "duration",
+        "location",
+    }
+    assert len([parent for parent in parents if parent.section_kind == "steps"]) == 3
+    assert len(chunks) <= 30
+
+    cases = json.loads((sample_root.parent / "evaluation.json").read_text(encoding="utf-8"))
+    assert len(cases) == 9
+    assert any(not case["supported"] for case in cases)
+    assert any(case["question"].isascii() for case in cases)
+
+
+def test_retrieval_can_limit_search_to_selected_source():
+    chunks = [
+        Chunk("a", "pa", "رسوم الخدمة خمسة دنانير", "رسوم الخدمة خمسة دنانير", "a.pdf", section_kind="fees"),
+        Chunk("b", "pb", "رسوم الخدمة عشرة دنانير", "رسوم الخدمة عشرة دنانير", "b.pdf", section_kind="fees"),
+    ]
+    retriever = HybridRetriever(_FakeStore(chunks), _FakeOllama(), "fake", candidates=2, final_k=2)
+    results = retriever.retrieve("كم رسوم الخدمة؟", source_scope=["b.pdf"])
+    assert [result.chunk.source for result in results] == ["b.pdf"]
+
+
+def test_retrieval_boosts_matching_government_service_section():
+    chunks = [
+        Chunk("a", "pa", "معلومات الخدمة", "معلومات الخدمة", "guide.pdf"),
+        Chunk("b", "pb", "معلومات الخدمة", "معلومات الخدمة", "fees.pdf", section_kind="fees"),
+    ]
+    retriever = HybridRetriever(_FakeStore(chunks), _FakeOllama(), "fake", candidates=2, final_k=2)
+    results = retriever.retrieve("كم رسوم الخدمة؟")
+    assert results[0].chunk.id == "b"
+
+
+def test_answer_warns_when_sources_disagree_on_same_unit():
+    class ValidOllama(_FakeOllama):
+        def chat_json(self, model, messages, schema):
+            return {
+                "answer": "تختلف الرسوم حسب المصدر.",
+                "supported": True,
+                "citations": [{"evidence_id": "E1", "quote": "الرسوم 5 دنانير.", "reason": "قيمة الرسوم"}],
+            }
+
+    chunks = [
+        RetrievedChunk(Chunk("a", "pa", "", "", "a.pdf", section_kind="fees"), 0.2),
+        RetrievedChunk(Chunk("b", "pb", "", "", "b.pdf", section_kind="fees"), 0.19),
+    ]
+    parents = {
+        "pa": ParentSection("pa", "الرسوم 5 دنانير.", "a.pdf", section_kind="fees"),
+        "pb": ParentSection("pb", "الرسوم 10 دنانير.", "b.pdf", section_kind="fees"),
+    }
+    result = GroundedAnswerer(ValidOllama(), "fake").answer("كم الرسوم؟", chunks, parents)
+    assert result.supported
+    assert result.evidence_warnings
+    assert "قيم" in result.evidence_warnings[0]
 
 
 def test_atomic_index_build_preserves_previous_index_on_staging_failure():

@@ -1,5 +1,6 @@
 """Deterministic LangGraph workflow for the local document assistant."""
 
+import inspect
 import time
 from typing import Callable, Dict, List, TypedDict
 
@@ -15,6 +16,7 @@ class RAGState(TypedDict, total=False):
     answer: Answer
     timings_ms: Dict[str, int]
     workflow: List[str]
+    source_scope: List[str]
 
 
 class DeterministicRAGWorkflow:
@@ -35,6 +37,7 @@ class DeterministicRAGWorkflow:
             ) from exc
 
         self._retrieve_callback = retrieve
+        self._retrieve_accepts_scope = len(inspect.signature(retrieve).parameters) >= 2
         self._load_parents_callback = load_parents
         self._answer_callback = answer
 
@@ -69,7 +72,11 @@ class DeterministicRAGWorkflow:
 
     def _retrieve_evidence(self, state: RAGState) -> dict:
         started = time.perf_counter()
-        retrieved = self._retrieve_callback(state["question"])
+        retrieved = (
+            self._retrieve_callback(state["question"], state.get("source_scope", []))
+            if self._retrieve_accepts_scope else
+            self._retrieve_callback(state["question"])
+        )
         update = self._record(state, "retrieve_evidence", int((time.perf_counter() - started) * 1000))
         update["retrieved"] = retrieved
         return update
@@ -95,13 +102,19 @@ class DeterministicRAGWorkflow:
         update["answer"] = answer
         return update
 
-    def invoke(self, question: str, response_language: str = "ar") -> Answer:
+    def invoke(
+        self,
+        question: str,
+        response_language: str = "ar",
+        source_scope: List[str] | None = None,
+    ) -> Answer:
         started = time.perf_counter()
         state = self._graph.invoke({
             "question": question,
             "response_language": response_language,
             "timings_ms": {},
             "workflow": [],
+            "source_scope": list(source_scope or []),
         })
         result = state["answer"]
         result.latency_ms = int((time.perf_counter() - started) * 1000)

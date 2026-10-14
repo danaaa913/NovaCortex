@@ -164,7 +164,11 @@ class HackathonRAG:
             )
         return self._retriever
 
-    def retrieve(self, question: str) -> List[RetrievedChunk]:
+    def available_sources(self) -> List[str]:
+        """List indexed sources for an optional user-selected search scope."""
+        return sorted({chunk.source for chunk in self.store.load_chunks()})
+
+    def retrieve(self, question: str, source_scope: List[str] | None = None) -> List[RetrievedChunk]:
         question = clean_text(question)
         if not question:
             raise ValueError("Question cannot be empty")
@@ -174,9 +178,9 @@ class HackathonRAG:
                 "The question cannot be searched safely. Remove authentication secrets or "
                 "add a general question about the service."
             )
-        return self._get_retriever().retrieve(clean_text(privacy.sanitized_question))
+        return self._get_retriever().retrieve(clean_text(privacy.sanitized_question), source_scope)
 
-    def ask(self, question: str) -> Answer:
+    def ask(self, question: str, source_scope: List[str] | None = None) -> Answer:
         privacy = decide_question_privacy(question)
         if privacy.action == "block":
             arabic = privacy.language == "ar"
@@ -200,6 +204,7 @@ class HackathonRAG:
                 privacy_action="block",
                 privacy_categories=list(privacy.categories),
                 redacted_count=privacy.redacted_count,
+                scope_sources=sorted(set(source_scope or [])),
             )
             return result
 
@@ -207,6 +212,7 @@ class HackathonRAG:
         if feature_result is not None:
             result = self._apply_privacy_metadata(feature_result, privacy)
             result.request_id = result.request_id or uuid4().hex
+            result.scope_sources = sorted(set(source_scope or []))
             if self.config.trace_enabled:
                 self._write_trace(result)
             return result
@@ -218,8 +224,19 @@ class HackathonRAG:
                 load_parents=self.store.load_parents,
                 answer=answerer.answer,
             )
-        result = self._workflow.invoke(privacy.sanitized_question, response_language=privacy.language)
+        if source_scope:
+            result = self._workflow.invoke(
+                privacy.sanitized_question,
+                response_language=privacy.language,
+                source_scope=source_scope,
+            )
+        else:
+            result = self._workflow.invoke(
+                privacy.sanitized_question,
+                response_language=privacy.language,
+            )
         result = self._apply_privacy_metadata(result, privacy)
+        result.scope_sources = sorted(set(source_scope or []))
         result.request_id = uuid4().hex
         if self.config.trace_enabled:
             self._write_trace(result)
@@ -256,6 +273,9 @@ class HackathonRAG:
                 "privacy_action": result.privacy_action,
                 "privacy_categories": result.privacy_categories,
                 "redacted_count": result.redacted_count,
+                "answer_mode": result.answer_mode,
+                "evidence_warning_count": len(result.evidence_warnings),
+                "scope_sources": result.scope_sources,
             }
             trace_path = self.config.index_dir.parent / "rag_traces.jsonl"
             trace_path.parent.mkdir(parents=True, exist_ok=True)

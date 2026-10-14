@@ -13,8 +13,45 @@ HEADING_RE = re.compile(
     r"\d+(?:\.\d+)*[.)-]?\s+\S.+)$",
     re.I,
 )
+SERVICE_SECTION_RE = re.compile(
+    r"^(?:[-*•]\s*)?(?:"
+    r"الشروط|شروط الخدمة|شروط الاستحقاق|الفئات المستفيدة|المستفيدون|الوثائق المطلوبة|المستندات المطلوبة|"
+    r"الرسوم|التكلفة|مدة الإنجاز|المدة|خطوات الخدمة|الإجراءات|طريقة التقديم|الاستثناءات|"
+    r"قنوات الخدمة|معلومات الاتصال|الأساس القانوني|requirements?|eligibility|beneficiaries|"
+    r"required documents?|fees?|cost|processing time|duration|steps?|procedure|exceptions?|"
+    r"contact|legal basis)\s*[:：-]?\s*$",
+    re.I,
+)
 COURSE_RE = re.compile(r"^(?:[A-Z]{2,6}\s*[- ]?\d{2,4})\s*[:\-–—]?")
 SENTENCE_SEPARATORS = ["\n\n", "\n", "؟ ", ". ", "! ", "؛ ", "، ", " "]
+
+SECTION_KINDS = {
+    "eligibility": ("شروط الاستحقاق", "الفئات المستفيدة", "المستفيدون", "مؤهل", "eligibility", "beneficiaries"),
+    "requirements": ("شروط الخدمة", "الشروط", "requirements", "requirement"),
+    "documents": ("الوثائق المطلوبة", "المستندات المطلوبة", "required document", "documents"),
+    "fees": ("الرسوم", "التكلفة", "دينار", "fees", "cost"),
+    "duration": ("مدة الإنجاز", "المدة", "يوم عمل", "processing time", "duration"),
+    "steps": ("خطوات الخدمة", "الإجراءات", "طريقة التقديم", "steps", "procedure", "apply"),
+    "location": ("مكان تقديم الخدمة", "أماكن تقديم الخدمة", "قنوات تقديم الخدمة", "service location", "locations"),
+    "exceptions": ("الاستثناءات", "exceptions"),
+    "contact": ("قنوات الخدمة", "معلومات الاتصال", "contact"),
+    "legal_basis": ("الأساس القانوني", "المادة", "النظام", "legal basis", "article"),
+}
+
+
+def classify_section(section: str, text: str = "") -> str:
+    """Classify common government-service sections without using an LLM."""
+    # The explicit heading is stronger evidence than words mentioned inside the
+    # section. For example, procedural steps often mention fees or documents.
+    heading = section.casefold()
+    for kind, markers in SECTION_KINDS.items():
+        if any(marker.casefold() in heading for marker in markers):
+            return kind
+    value = text[:240].casefold()
+    for kind, markers in SECTION_KINDS.items():
+        if any(marker.casefold() in value for marker in markers):
+            return kind
+    return "general"
 
 
 def _stable_id(*parts: object) -> str:
@@ -118,7 +155,12 @@ def _structural_blocks(text: str) -> List[Tuple[str, str]]:
             if current and current[-1] != "":
                 current.append("")
             continue
-        is_boundary = bool(HEADING_RE.match(stripped) or COURSE_RE.match(stripped))
+        is_boundary = bool(HEADING_RE.match(stripped) or COURSE_RE.match(stripped) or SERVICE_SECTION_RE.match(stripped))
+        # Numbered service steps and requirements are list items, not section
+        # headings. Keeping the complete list together preserves the procedure's
+        # meaning and prevents tiny chunks such as a single isolated step.
+        if re.match(r"^\d+[.)-]\s+", stripped) and classify_section(section) != "general":
+            is_boundary = False
         if is_boundary and current:
             blocks.append((section, "\n".join(current).strip()))
             current = []
@@ -155,13 +197,15 @@ def _merge_small(chunks: List[str], minimum: int, maximum: int) -> List[str]:
     return merged
 
 
-def _context_header(source: str, page: int | None, section: str, document_type: str) -> str:
+def _context_header(source: str, page: int | None, section: str, document_type: str, section_kind: str = "general") -> str:
     fields = [f"Source: {source}"]
     if page is not None:
         fields.append(f"Page: {page}")
     if section:
         fields.append(f"Section: {section}")
     fields.append(f"Type: {document_type}")
+    if section_kind != "general":
+        fields.append(f"Service section: {section_kind}")
     return "[" + " | ".join(fields) + "]"
 
 
@@ -178,6 +222,7 @@ def build_chunks(
     for unit in units:
         for structural_section, block in _structural_blocks(unit.text):
             section = structural_section or unit.section
+            section_kind = classify_section(section, block)
             is_table = unit.document_type in {"xlsx", "docx_table"} or block.lstrip().casefold().startswith("[table]")
             parent_bodies = _split_table(block, parent_size) if is_table else []
             if not parent_bodies:
@@ -191,13 +236,14 @@ def build_chunks(
                     page=unit.page,
                     section=section,
                     document_type=unit.document_type,
+                    section_kind=section_kind,
                 )
                 parents.append(parent)
                 bodies = _split_table(parent_body, child_size) if is_table else []
                 if not bodies:
                     bodies = _merge_small(_split_long(parent_body, child_size, overlap), minimum, child_size)
                 for child_index, body in enumerate(bodies):
-                    header = _context_header(unit.source, unit.page, section, unit.document_type)
+                    header = _context_header(unit.source, unit.page, section, unit.document_type, section_kind)
                     text = f"{header}\n{body}"
                     children.append(Chunk(
                         id=_stable_id(parent_id, child_index, body),
@@ -209,5 +255,6 @@ def build_chunks(
                         section=section,
                         document_type=unit.document_type,
                         chunk_index=child_index,
+                        section_kind=section_kind,
                     ))
     return parents, children

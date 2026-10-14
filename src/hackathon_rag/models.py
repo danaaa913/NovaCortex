@@ -11,6 +11,7 @@ class SourceUnit:
     page: Optional[int] = None
     section: str = ""
     document_type: str = "text"
+    section_kind: str = "general"
 
 
 @dataclass
@@ -21,6 +22,7 @@ class ParentSection:
     page: Optional[int] = None
     section: str = ""
     document_type: str = "text"
+    section_kind: str = "general"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -35,6 +37,7 @@ class Chunk:
     section: str = ""
     document_type: str = "text"
     chunk_index: int = 0
+    section_kind: str = "general"
 
     def metadata(self) -> Dict[str, Any]:
         return {
@@ -44,6 +47,7 @@ class Chunk:
             "section": self.section,
             "document_type": self.document_type,
             "chunk_index": self.chunk_index,
+            "section_kind": self.section_kind,
         }
 
     def to_dict(self) -> Dict[str, Any]:
@@ -72,6 +76,9 @@ class Answer:
     privacy_categories: List[str] = field(default_factory=list)
     redacted_count: int = 0
     privacy_notice: str = ""
+    answer_mode: str = "generated"
+    evidence_warnings: List[str] = field(default_factory=list)
+    scope_sources: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

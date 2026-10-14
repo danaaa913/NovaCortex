@@ -33,6 +33,17 @@ def main() -> None:
         )
         rag = HackathonRAG(config)
 
+        source_scope = []
+        try:
+            indexed_sources = rag.available_sources()
+            source_scope = st.multiselect(
+                "Search only in selected files (optional)",
+                indexed_sources,
+                help="Leave empty to search all indexed documents.",
+            )
+        except RuntimeError:
+            pass
+
         if st.button("Check environment", use_container_width=True):
             st.json(rag.doctor())
         if st.button("Preview chunks", use_container_width=True):
@@ -64,10 +75,14 @@ def main() -> None:
         with st.chat_message("assistant"):
             with st.spinner("Searching the documents..."):
                 try:
-                    result = rag.ask(question)
+                    result = rag.ask(question, source_scope=source_scope)
                     if result.privacy_notice:
                         st.info(result.privacy_notice)
                     st.write(result.answer)
+                    if result.answer_mode == "extractive":
+                        st.info("The model answer was not safely verifiable, so exact relevant passages are shown instead.")
+                    for warning in result.evidence_warnings:
+                        st.warning(warning)
                     if result.workflow == ["privacy_guard"]:
                         st.info("Privacy guard stopped the request before retrieval or model processing")
                     elif result.supported:
