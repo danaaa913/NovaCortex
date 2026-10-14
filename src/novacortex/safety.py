@@ -1,5 +1,6 @@
 """Input safety: scope detection, injection filter, greeting and false-premise handling."""
 
+import asyncio
 import json
 import logging
 import re
@@ -8,6 +9,7 @@ from typing import Optional, Dict
 
 from novacortex.knowledge.faculty import COLLOQUIAL_FACULTY_TERMS
 from novacortex.knowledge.keywords import UNIVERSITY_CONTEXT_KEYWORDS
+from novacortex.input_rules import INJECTION_PATTERNS, detect_injection
 from novacortex.llm import llm_client
 
 logger = logging.getLogger(__name__)
@@ -88,7 +90,8 @@ CRITICAL RULE: If the question mentions "Yarmouk" or "اليرموك" alongside 
         if question in self.cache:
             return self.cache[question]
         try:
-            response = self.client.chat.completions.create(
+            response = await asyncio.to_thread(
+                self.client.chat.completions.create,
                 model="llama-3.3-70b-versatile",
                 messages=[
                     {"role": "system", "content": self.classification_prompt},
@@ -160,50 +163,14 @@ def detect_response_depth(question: str) -> str:
     if any(kw in q_lower for kw in brief_kw) and len(q_lower.split()) <= 8:
         return "brief"
     return "moderate"
-INJECTION_PATTERNS = [
-    r'تجاهل\s*(كل|جميع)?\s*التعليمات',
-    r'تجاهل\s*(كل|جميع)?\s*تعليمات',  # يشمل 'تعليماتك' و'تعليماتي'
-    r'ignore\s+.{0,25}instructions',
-    r'أنت\s+الآن',
-    r'you\s+are\s+now',
-    r'forget\s+(everything|your\s+rules)',
-    r'انسى\s+(كل|تعليماتك)',
-    r'system\s*prompt',
-    r'اعطيني\s+تعليماتك',
-    r'reveal\s+your\s+(instructions|prompt)',
-    r'act\s+as\s+(if|a|an)',
-    r'تصرف\s+كأنك',
-    r'do\s+not\s+follow',
-    r'override',
-    r'jailbreak',
-    r'DAN\s+mode',
-    r'developer\s+mode',
-    r'بدون\s+قيود',
-    r'without\s+restrictions',
-    r'new\s+persona',
-    r'شخصية\s+جديدة',
-    # ===== إضافات: طلبات الاختراق الضار =====
-    r'كيف\s+أعمل\s+هاكر',
-    r'كيف\s+أخترق\s+نظام',
-    r'كيف\s+أخترق',
-    r'hack\s+the\s+(university|system|server)',
-    r'اخترق\s+(الجامعة|النظام|الموقع)',
-    r'كيف\s+أسرق\s+(بيانات|كلمة\s+مرور|حساب)',
-    r'كيف\s+أدخل\s+على\s+(حساب|نظام|موقع)\s+شخص',
-]
-def detect_injection(question: str) -> bool:
-    q_low = question.lower()
-    # أضف 'نكتة' و 'joke' للمصفوفة الموجودة عندك
-    patterns = [r'ignore instructions', r'prompt', r'jailbreak', r'نكتة', r'joke', r'احكيلي نكتة']
-    return any(re.search(p, q_low) for p in patterns)
-
 # ==================== FALSE PREMISE CORRECTOR ====================
 async def check_false_premise_llm(question: str, lang: str, llm_client) -> Optional[str]:
     q_lower = question.lower()
     if not re.search(r'اليرموك|yarmouk', q_lower, re.IGNORECASE):
         return None
     try:
-        response = llm_client.chat.completions.create(
+        response = await asyncio.to_thread(
+            llm_client.chat.completions.create,
             model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": (

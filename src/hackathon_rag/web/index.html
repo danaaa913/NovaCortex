@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="مساعد محلي موثق للإجابة من وثائق الخدمات الحكومية">
+  <title>NovaCortex | مساعد الخدمات</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">N</span>
+        <div><strong>NovaCortex</strong><small>مساعد الخدمات الحكومية المحلي</small></div>
+      </div>
+      <div class="status"><span id="statusDot"></span><span id="statusText">جاري فحص النظام</span></div>
+    </header>
+
+    <section class="hero">
+      <p class="eyebrow">إجابات من الوثائق فقط</p>
+      <h1>اسأل عن الخدمة، وخذ الجواب مع دليله.</h1>
+      <p>تتم المعالجة محليًا، وتظهر الصفحة والمصدر والاقتباس الذي بُني عليه الجواب.</p>
+    </section>
+
+    <section class="workspace">
+      <aside class="panel controls">
+        <div class="panel-heading"><div><span>نطاق البحث</span><small>اختياري</small></div><button id="refreshSources" class="icon-button" title="تحديث">↻</button></div>
+        <p class="hint">اتركها فارغة للبحث في جميع الوثائق، أو اختر ملفات خدمة محددة.</p>
+        <div id="sources" class="source-list"><div class="skeleton"></div><div class="skeleton short"></div></div>
+        <details class="access-box">
+          <summary>رمز الوصول للخادم</summary>
+          <label for="token">يُطلب فقط عند النشر المحمي</label>
+          <input id="token" type="password" autocomplete="off" placeholder="Access token">
+        </details>
+        <div class="privacy-card"><strong>خصوصيتك</strong><p>تُحذف بيانات الهوية والاتصال غير اللازمة قبل البحث. لا ترسل كلمة مرور أو OTP أو PIN أو CVV.</p></div>
+      </aside>
+
+      <section class="panel conversation">
+        <div id="emptyState" class="empty-state">
+          <div class="document-icon">⌕</div>
+          <h2>ما الذي تريد معرفته؟</h2>
+          <p>مثال: ما الوثائق المطلوبة وكم تستغرق الخدمة؟</p>
+        </div>
+        <div id="result" class="result hidden" aria-live="polite">
+          <div id="privacyNotice" class="notice hidden"></div>
+          <div class="answer-head"><span id="answerBadge" class="badge"></span><span id="latency"></span></div>
+          <div id="answer" class="answer"></div>
+          <div id="warnings"></div>
+          <div id="citations" class="citations"></div>
+        </div>
+        <div id="error" class="error hidden" role="alert"></div>
+        <form id="askForm" class="composer">
+          <label class="sr-only" for="question">اكتب سؤالك</label>
+          <textarea id="question" maxlength="4000" rows="2" placeholder="اكتب سؤالك عن الخدمة هنا..." required></textarea>
+          <button id="send" type="submit"><span>إرسال</span><b>←</b></button>
+        </form>
+      </section>
+    </section>
+
+    <footer>يعمل محليًا بواسطة Ollama · المصادر المسترجعة تُعامل كبيانات غير موثوقة</footer>
+  </main>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

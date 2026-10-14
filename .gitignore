@@ -39,6 +39,9 @@ dashboard_output/
 *.zip
 synthetic_questions.json
 progress.json
+evaluation_failures.json
+hackathon_workspace/
+hackathon.env
 
 # ---------------------------------------------------------------- editors / OS
 .vscode/

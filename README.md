@@ -6,9 +6,63 @@ verified facts, a RAG vector index over the scraped university knowledge base,
 web search and an LLM fallback, with guardrails, semantic caching and per-user
 conversation memory.
 
+> **Local hackathon build:** the repository also contains a separate, generic
+> Ollama-based document assistant. It has no Yarmouk, Telegram, Groq or web-search
+> dependency. Start with `python hackathon.py preview`; the Arabic preparation
+> guide is in `docs/hackathon-prep-ar.md`.
+
+For a clean setup on another Windows or Linux laptop, follow
+`docs/second-laptop-setup-ar.md`. The default local models are
+`qwen2.5:7b` for answers and `embeddinggemma` for retrieval embeddings.
+
+The hackathon assistant uses a deterministic LangGraph workflow around its
+hybrid retrieval and grounded answer components. An optional MCP server exposes
+the same engine to compatible clients through `python hackathon_mcp.py`.
+
 The implementation used to live in a single ~4,200-line `NovaCortexbot.py`.
 It is now a normal Python package under `src/novacortex/`; the original file
 remains only as a thin compatibility shim.
+
+### Government-service RAG safeguards
+
+The local hackathon assistant includes a small set of high-impact strategies
+for Arabic government-service documents:
+
+- recognises service sections such as eligibility, required documents, fees,
+  processing time, steps, exceptions and legal basis, and boosts the matching
+  section for each question;
+- can restrict a question to selected indexed files from the UI or with
+  `ask "..." --source guide.pdf`, preventing unrelated services from being
+  mixed into the context;
+- falls back to exact, cited source passages when the generated answer or its
+  quotation cannot be validated;
+- warns when different sources contain conflicting numeric values with the
+  same unit, or when a retrieved source explicitly says it is obsolete;
+- reports likely scanned PDFs during preview so OCR can be enabled only when
+  the competition documents actually require it.
+
+Rebuild an existing hackathon index after pulling these changes so the new
+service-section metadata is stored with every chunk.
+
+### FastAPI web interface
+
+The deployable interface is served by FastAPI while the original Streamlit UI
+remains available for quick experiments. Install `hackathon_requirements.txt`,
+build the index, then run:
+
+```bash
+python hackathon_api.py
+```
+
+Open `http://127.0.0.1:8000`. The same server provides `/api/health`,
+`/api/sources`, `/api/ask`, and interactive API documentation at `/api/docs`.
+The RAG engine stays warm between requests and a local semaphore prevents
+multiple Ollama generations from exhausting laptop RAM or VRAM.
+
+For a network deployment, set `HACKATHON_API_HOST=0.0.0.0` and a strong
+`HACKATHON_API_TOKEN`. The launcher refuses a non-local bind without that
+token. Put TLS in front of the app and keep Ollama, Chroma, the index and the
+uploaded documents on the same private server.
 
 ## Features
 
@@ -20,12 +74,14 @@ remains only as a thin compatibility shim.
 - **Guardrails** — out-of-scope detection, prompt-injection blocking,
   false-premise correction and comparison-request refusal.
 - **Semantic cache** — SQLite-backed cosine cache with a tunable similarity
-  threshold (0.88) so rephrased questions reuse previous answers.
+  threshold (0.88). Time-sensitive, person-specific and numeric questions are
+  excluded so a similar old question cannot reuse a stale answer.
 - **Memory** — per-user conversation history with rolling summaries.
 - **Bilingual NLP** — Arabic normalisation/tokenisation/stemming (NLTK
   Snowball) and language detection with an Arabic-dominance threshold.
 - **Auto-reindex** — MD5 of `data/yarmouk_data.json` is cached; the vector
-  store rebuilds itself when the knowledge base changes.
+  store rebuilds itself when the knowledge base changes without dropping the
+  middle sections of long source documents.
 
 ## Requirements
 
@@ -78,7 +134,9 @@ novacortex                    # if installed with `pip install -e .`
 ```
 
 Bot commands: `/start` (registration conversation), `/clear` (wipe memory),
-`/cancel` (abort conversation), then ask anything in the free-text handler.
+`/privacy` (show stored-data information), `/delete_my_data CONFIRM` (delete
+the profile, question log and memory), `/cancel` (abort conversation), then
+ask anything in the free-text handler.
 
 ## Project layout
 
@@ -129,6 +187,8 @@ python tests/test_data_integrity.py # standalone, no pytest needed
   regression-marker checks over the whole package.
 - `tests/test_unit_text.py` — Arabic normalisation / language detection.
 - `tests/test_unit_knowledge.py` — static knowledge + config sanity.
+- `tests/golden_questions.json` + `scripts/evaluate_answers.py` — content-level
+  evaluation of sources, required facts, forbidden claims and abstention.
 - `tests/test_bot_internal.py` — end-to-end agent test, **skipped unless**
   `NOVACORTEX_RUN_INTEGRATION=1` (needs a working environment + network).
 

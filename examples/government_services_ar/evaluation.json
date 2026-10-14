@@ -1,0 +1,54 @@
+[
+  {
+    "question": "كم رسوم تصديق عقد العمل؟",
+    "supported": true,
+    "expected_source": "mfa-document-attestation.md",
+    "must_include": ["10"]
+  },
+  {
+    "question": "كم تستغرق معاملة تصديق الوثائق؟",
+    "supported": true,
+    "expected_source": "mfa-document-attestation.md",
+    "must_include": ["نفس اليوم"]
+  },
+  {
+    "question": "ما خطوات تصديق وثيقة أردنية لاستخدامها خارج المملكة؟",
+    "supported": true,
+    "expected_source": "mfa-document-attestation.md"
+  },
+  {
+    "question": "هل توجد رسوم لتدقيق معاملات جوازات السفر؟",
+    "supported": true,
+    "expected_source": "psd-passport-audit.md",
+    "must_include": ["لا توجد"]
+  },
+  {
+    "question": "كم يستغرق تدقيق معاملة جواز السفر؟",
+    "supported": true,
+    "expected_source": "psd-passport-audit.md",
+    "must_include": ["30"]
+  },
+  {
+    "question": "ما الوثائق المطلوبة لتسديد الإقامة السنوية؟",
+    "supported": true,
+    "expected_source": "psd-residence-renewal.md",
+    "must_include": ["جواز السفر", "الإقامة"]
+  },
+  {
+    "question": "كم رسوم تسديد الإقامة السنوية؟",
+    "supported": true,
+    "expected_source": "psd-residence-renewal.md",
+    "must_include": ["دينار"]
+  },
+  {
+    "question": "How long does the passport audit service take?",
+    "supported": true,
+    "expected_source": "psd-passport-audit.md",
+    "must_include": ["30"]
+  },
+  {
+    "question": "ما رسوم تجديد رخصة القيادة؟",
+    "supported": false,
+    "must_not_include": ["5 دنانير", "10 دنانير", "21 دينار"]
+  }
+]

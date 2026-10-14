@@ -1,5 +1,24 @@
 # NovaCortex — Architecture
 
+## Local hackathon document assistant
+
+The separate `src/hackathon_rag/` package is a local, generic document assistant.
+It uses custom structure-aware loaders and chunking, Chroma vector search, BM25
+and reciprocal-rank fusion. `workflow.py` wraps question answering in a fixed
+LangGraph workflow: validate question → retrieve evidence → load parent context
+→ generate a cited answer. The graph contains no autonomous tool selection or
+open loop.
+
+`mcp_server.py` is an optional adapter over the same `HackathonRAG` engine used
+by the CLI and Streamlit UI. It exposes document search, grounded answering,
+source-page lookup and index status without duplicating retrieval logic.
+
+The ingestion report records successful, empty and failed files. Tables from
+PDF, DOCX, PPTX and XLSX are normalized to Markdown while retaining source,
+page/slide and section metadata. Scanned or visually complex pages remain an
+explicit OCR/visual-processing limitation rather than being silently indexed as
+empty content.
+
 NovaCortex is a layered Telegram bot: a thin transport layer, an agent that
 owns the request lifecycle, a hybrid answer pipeline (facts → cache → RAG →
 web → LLM), and static knowledge/RAG subpackages. Everything is wired in
@@ -12,21 +31,23 @@ web → LLM), and static knowledge/RAG subpackages. Everything is wired in
 | `config.py` | CWD-relative paths (`data/`, `cache/`, `chroma_ultra/`, DB, log), verbatim constants (`RAG_CONFIDENCE_THRESHOLD`, `OFFICIAL_PDFS`, …), secret loading from env/`.env`, `missing_secrets()` / `require_secrets()` |
 | `llm.py` | `_LazyLLMClient` — Groq via the OpenAI SDK (`base_url=api.groq.com`), built on **first attribute access** so imports never fail without secrets. `llm_client` (+ legacy alias `grok_client`) |
 | `logging_setup.py` | Idempotent `configure_logging()` → `logs/novacortex.log` (override: `NOVACORTEX_LOG_FILE`); called from `main()` and the compatibility shim only |
-| `bot/handlers.py` | Telegram transport: `/start` conversation (study level → university ID), `/clear`, `/cancel`, free-text handler; `main()` = `configure_logging() → require_secrets() → init_db() → load_data_from_json() → run_polling()` |
+| `bot/handlers.py` | Telegram transport: `/start`, `/clear`, `/privacy`, confirmed `/delete_my_data`, `/cancel`, long-message splitting and free-text handling; the heavy agent is initialized during application startup |
 | `agent.py` | `YarmoukAgent.ask()` — loads embeddings + Chroma, builds retriever/cache/scope-detector/pipeline, sanitises the response (strips CJK/invisible chars), formats it, logs to SQLite; returns `{response, source, confidence, response_time_ms, docs_retrieved}` |
 | `pipeline.py` | `EnhancedHybridPipeline.process_question()` — the routing brain: safety checks, facts routing, semantic cache lookup, RAG, web search, LLM fallback, confidence scoring |
 | `intents.py` | `semantic_parser`, `facts_router`, `expand_colloquial_terms` — colloquial Arabic → canonical intent before routing |
 | `safety.py` | `SmartOutOfScopeDetector` — out-of-scope, prompt injection, false premises, comparison refusal |
-| `cache.py` | `SemanticResponseCache` — SQLite question→answer cache with cosine similarity, `SIMILARITY_THRESHOLD = 0.88`, `_is_incompatible_cache()` guard; also owns the dynamic-threshold helper |
+| `cache.py` | `SemanticResponseCache` — SQLite question→answer cache with cosine similarity, `SIMILARITY_THRESHOLD = 0.88`, `_is_incompatible_cache()` guard and volatile/entity-specific question exclusion |
+| `quality.py` | Evidence scoring for RAG/web results plus dependency-free transport/cache helpers |
+| `input_rules.py` | Dependency-free prompt-injection and false-premise gating rules |
 | `memory.py` | Per-user message history + rolling summaries (SQLite, `DB_PATH`) |
 | `db.py` | Schema and CRUD: users, questions, daily stats (`init_db`, `save_user`, `log_question`, …) |
 | `text.py` | `ArabicProcessor`: normalise (إأآا→ا, ى→ي, ة→ه), tokenise with NLTK Arabic stopwords + Snowball stemming, language detection with a 0.6 Arabic-dominance threshold |
 | `formatting.py` | Source-aware response decoration, `NO_RESULT_MESSAGE_AR/EN` |
 | `knowledge/*` | Pure data: `facts` (bilingual verified facts), `faculty` (deans/colloquial terms), `careers`, `keywords`, `localization` |
-| `rag/indexing.py` | `load_data_from_json()` — MD5 change detection, garbled-PDF text repair (`_fix_reversed_arabic`, `_is_garbled_content`), ExternalPlans title mapping, chunking (`MAX_CHUNKS_PER_DOC`, priority boost) → Chroma. Heavy langchain imports are **lazy inside this function** |
+| `rag/indexing.py` | `load_data_from_json()` — MD5 change detection, garbled-PDF text repair (`_fix_reversed_arabic`, `_is_garbled_content`), ExternalPlans title mapping and non-destructive chunking → Chroma. Heavy langchain imports are **lazy inside this function** |
 | `rag/retriever.py` | `ImprovedHybridRetriever` — Chroma similarity + BM25 fusion (reciprocal-rank fusion), priority-1 boosting |
 | `rag/reranking.py`, `rag/generation.py` | LLM re-ranking and grounded answer synthesis with citations |
-| `rag/web_search.py` | Serper (Google) search fallback with Arabic/English query shaping |
+| `rag/web_search.py` | Serper fallback with Arabic/English query shaping; reads HTML/PDF evidence from verified `yu.edu.jo` hosts and falls back to snippets |
 | `rag/pdf.py` | `PDFExtractor.fetch_and_extract` — `pdfplumber` imported lazily inside the method |
 | `__main__.py` | `python -m novacortex` → `bot.handlers.main()` |
 
@@ -47,8 +68,8 @@ Telegram update
             │    ├─ intents: expand_colloquial_terms → facts_router
             │    ├─ knowledge/facts: deterministic answer (source="verified_facts")
             │    ├─ cache: semantic hit?                (source="cache")
-            │    ├─ rag:  retriever (Chroma ⊕ BM25) → rerank → generate (source="rag")
-            │    ├─ web:  serper search → synthesize    (source="web")
+            │    ├─ rag:  retriever (Chroma ⊕ BM25) → rerank → evidence gate → generate (source="rag")
+            │    ├─ web:  serper search → evidence score → synthesize + source links (source="web")
             │    └─ llm:  direct Groq fallback          (source="llm")
             ├─ agent._sanitize_response                  (CJK / bidi cleanup)
             ├─ formatting.format                         (source-aware decoration)
@@ -65,7 +86,7 @@ data/yarmouk_data.json ── MD5 (cache/data_hash.txt) ── unchanged? skip
         │ changed
         ├─ garbled-PDF repair: _is_garbled_content → _fix_reversed_arabic
         ├─ title fixes: EXTERNAL_PLANS_TITLE_MAP
-        ├─ chunking: MAX_CHUNKS_PER_DOC / HIGH_PRIORITY_MAX_CHUNKS (priority == 1)
+        ├─ structure-aware chunking without destructive first/last truncation
         └─ HuggingFaceEmbeddings("intfloat/multilingual-e5-large-instruct")
              → chroma_ultra/ vector store
 ```

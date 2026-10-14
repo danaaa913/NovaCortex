@@ -11,6 +11,7 @@ from typing import Optional, Dict, Tuple
 import numpy as np
 
 from novacortex.config import DB_PATH
+from novacortex.quality import is_cacheable_question
 from novacortex.text import arabic_processor
 
 logger = logging.getLogger(__name__)
@@ -138,6 +139,8 @@ class SemanticResponseCache:
         return float(np.dot(a, b) / (na * nb))
 
     def get(self, question: str) -> Optional[Dict]:
+        if not is_cacheable_question(question):
+            return None
         c = self.conn.cursor()
 
         # PATH 1: Exact hash (~1ms)
@@ -184,6 +187,9 @@ class SemanticResponseCache:
 
         return None
     def set(self, question: str, response: str, confidence: float, source: str):
+        if not is_cacheable_question(question):
+            logger.info(f"[CACHE] Skipping volatile/entity-specific question: '{question[:40]}'")
+            return
         # لا تخزن أسئلة "قوائم/أسماء" — تسبب false hits لأن الـ embeddings تتشابه مع أسئلة مختلفة
         list_kws = ['اسماء', 'أسماء', 'اذكر', 'جميع', 'كل الكليات', 'قائمة', 'names', 'list all', 'اعطيني الاسماء']
         if any(kw in question.lower() for kw in list_kws):
